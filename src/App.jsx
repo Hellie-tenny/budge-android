@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
+import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK } from './security.jsx'
 
 const CATS = { Food: '#e8590c', Transport: '#1c7ed6', Airtime: '#9c36b5', Bills: '#e03131', Shopping: '#d6336c', Health: '#2f9e44', Other: '#868e96' }
 const EMO = { Food: '🍲', Transport: '🚌', Airtime: '📱', Bills: '💡', Shopping: '🛍️', Health: '💊', Other: '🧾', Salary: '💼', Business: '🏪', Gift: '🎁', Savings: '🎯', Transfer: '🔁' }
 const INCOME = ['Salary', 'Business', 'Gift', 'Other']
 const PC = ['#3d7ddd', '#42a542', '#8f8fe0', '#f59f00', '#e8590c']
-const mk = n => (n < 0 ? '-MK ' : 'MK ') + Math.abs(Math.round(n)).toLocaleString()
+const mk = n => mask.on ? 'MK ••••' : (n < 0 ? '-MK ' : 'MK ') + Math.abs(Math.round(n)).toLocaleString()
 const uid = () => Math.random().toString(36).slice(2, 9)
 const month = d => d.slice(0, 7)
 const mKey = (off = 0) => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - off); return d.toISOString().slice(0, 7) }
@@ -17,8 +18,8 @@ const dayLabel = iso => {
 }
 
 function useStore(key, init) {
-  const [v, setV] = useState(() => { try { return JSON.parse(localStorage.getItem(key)) ?? init } catch { return init } })
-  useEffect(() => { localStorage.setItem(key, JSON.stringify(v)) }, [key, v])
+  const [v, setV] = useState(() => vaultGet(key, init))
+  useEffect(() => { vaultPut(key, v) }, [key, v])
   return [v, setV]
 }
 
@@ -182,7 +183,7 @@ function Budgets({ budgets, setBudgets, txs }) {
           <Card key={c}>
             <div className="flex items-center gap-3">
               <Chip name={c} color={CATS[c]} /><span className="flex-1 font-medium">{c}</span>
-              <input type="number" inputMode="numeric" value={lim || ''} placeholder="No limit" onChange={e => setBudgets({ ...budgets, [c]: Number(e.target.value) })} className="w-28 rounded-xl bg-paper px-3 py-1.5 text-right outline-none focus:ring-2 focus:ring-azure/40" />
+              <input type="number" inputMode="numeric" value={mask.on ? '' : lim || ''} placeholder={mask.on ? '••••' : 'No limit'} disabled={mask.on} onChange={e => setBudgets({ ...budgets, [c]: Number(e.target.value) })} className="w-28 rounded-xl bg-paper px-3 py-1.5 text-right outline-none focus:ring-2 focus:ring-azure/40" />
             </div>
             <div className="mt-3 h-2 rounded-full bg-mist/40"><div className="h-2 rounded-full" style={{ width: pct + '%', background: bad ? '#ec4c4c' : CATS[c] }} /></div>
             <p className={'mt-1 text-xs ' + (bad ? 'text-down' : 'text-slate-500')}>{mk(s)} spent{lim ? ` of ${mk(lim)}` : ''}</p>
@@ -278,12 +279,62 @@ function AccountSheet({ onSave, onClose }) {
   )
 }
 
+function SecuritySheet({ onClose, onChange }) {
+  const [mode, setMode] = useState(hasPin() ? 'menu' : 'new'), [first, setFirst] = useState(''), [code, setCode] = useState('')
+  const done = () => { onChange(); onClose() }
+  return (
+    <Sheet onClose={mode === 'code' ? () => {} : onClose}>
+      {mode === 'menu' && <>
+        <h3 className="text-center font-semibold">App lock</h3>
+        <p className="text-center text-sm text-slate-500">PIN lock is on and your data is encrypted. Amounts stay hidden until you enter your PIN.</p>
+        <Save onClick={() => setMode('verify-change')}>Change PIN</Save>
+        <button onClick={() => setMode('verify-code')} className="w-full py-2 font-semibold text-azure">New recovery code</button>
+        <button onClick={() => setMode('verify-remove')} className="w-full py-2 font-semibold text-down">Remove PIN</button>
+      </>}
+      {mode === 'verify-change' && <PinCheck hint="Enter your current PIN" onOk={() => setMode('new')} />}
+      {mode === 'verify-code' && <PinCheck hint="Enter your PIN" onOk={async () => { setCode(await newRecovery()); setMode('code') }} />}
+      {mode === 'verify-remove' && <PinCheck hint="Enter your PIN to turn off the lock" onOk={async () => { await disablePin(); done() }} />}
+      {mode === 'new' && <PinPad title="Choose a PIN" hint={`${PIN_LEN} digits`} onDone={async p => { setFirst(p); setMode('confirm') }} />}
+      {mode === 'confirm' && <>
+        <PinPad title="Confirm your PIN" hint="Enter it again" onDone={async p => {
+          if (p !== first) return 'PINs do not match'
+          if (hasPin()) { await changePin(p); done() } else { setCode(await enablePin(p)); onChange(); setMode('code') }
+        }} />
+        <button onClick={() => setMode('new')} className="w-full text-sm font-semibold text-azure">Start over</button>
+      </>}
+      {mode === 'code' && <>
+        <h3 className="text-center font-semibold">Save your recovery code</h3>
+        <p className="text-center text-sm text-slate-500">If you forget your PIN, this code is the only way to get your data back. Write it down or take a screenshot. You won't see it again.</p>
+        <p className="select-all rounded-2xl bg-paper py-4 text-center font-mono text-xl font-bold tracking-wider">{code}</p>
+        <button onClick={() => navigator.clipboard?.writeText(code)} className="w-full py-1 text-sm font-semibold text-azure">Copy</button>
+        <Save onClick={onClose}>I've saved it</Save>
+      </>}
+    </Sheet>
+  )
+}
+
 const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['goals', 'Goals']]
-const ICONS = { home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', goals: 'M4 22V4M4 4h14l-3 5 3 5H4' }
+const ICONS = { home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', goals: 'M4 22V4M4 4h14l-3 5 3 5H4', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
-export default function App() {
+function Budgie({ onLock }) {
   const [tab, setTab] = useState('home'), [sheet, setSheet] = useState(null)
+  const [pinSet, setPinSet] = useState(hasPin), [revealed, setRevealed] = useState(REVEAL_ON_UNLOCK)
+  mask.on = pinSet && !revealed
+  useEffect(() => {
+    let away = 0
+    const f = () => {
+      if (document.hidden) { away = Date.now(); setRevealed(false) }
+      else if (pinSet && away && Date.now() - away > LOCK_AFTER_MS) onLock()
+    }
+    document.addEventListener('visibilitychange', f)
+    return () => document.removeEventListener('visibilitychange', f)
+  }, [pinSet])
+  useEffect(() => {
+    if (!revealed) return
+    const t = setTimeout(() => setRevealed(false), REVEAL_MS)
+    return () => clearTimeout(t)
+  }, [revealed])
   const [pockets, setPockets] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, balance: 0 })))
   const [txs, setTxs] = useStore('budgie.txs', [])
   const [budgets, setBudgets] = useStore('budgie.budgets', {})
@@ -300,9 +351,15 @@ export default function App() {
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <div className="mx-auto flex h-full max-w-md flex-col">
-      <header className="px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))]">
-        <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Budgie'}</p>
-        <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? 'Your money' : TABS.find(t => t[0] === tab)[1]}</h1>
+      <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))]">
+        <div>
+          <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Budgie'}</p>
+          <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? 'Your money' : TABS.find(t => t[0] === tab)[1]}</h1>
+        </div>
+        <div className="flex gap-2 text-slate-500">
+          {pinSet && <button onClick={() => revealed ? setRevealed(false) : setSheet('reveal')} aria-label={revealed ? 'Hide amounts' : 'Show amounts'} className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k={revealed ? 'eye' : 'eyeOff'} /></button>}
+          <button onClick={() => setSheet('security')} aria-label="App lock" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="lock" /></button>
+        </div>
       </header>
       <main className="flex-1 overflow-y-auto px-4 pb-36">
         {tab === 'home' && <Home pockets={pockets} txs={txs} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
@@ -317,7 +374,15 @@ export default function App() {
       </nav>
       {sheet === 'add' && <AddSheet pockets={pockets} onSave={save} onClose={() => setSheet(null)} />}
       {sheet === 'account' && <AccountSheet onSave={addAccount} onClose={() => setSheet(null)} />}
+      {sheet === 'reveal' && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(null) }} /></Sheet>}
+      {sheet === 'security' && <SecuritySheet onClose={() => setSheet(null)} onChange={() => setPinSet(hasPin())} />}
       {sheet?.fund && <FundSheet goal={sheet.fund} pockets={pockets} onSave={fund} onClose={() => setSheet(null)} />}
     </div>
   )
+}
+
+export default function App() {
+  const [locked, setLocked] = useState(hasPin)
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />
+  return <Budgie onLock={() => { lock(); setLocked(true) }} />
 }
