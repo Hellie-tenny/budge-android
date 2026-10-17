@@ -324,7 +324,7 @@ function Budgie({ onLock }) {
   useEffect(() => {
     let away = 0
     const f = () => {
-      if (document.hidden) { away = Date.now(); setRevealed(false) }
+      if (document.hidden) away = Date.now()
       else if (pinSet && away && Date.now() - away > LOCK_AFTER_MS) onLock()
     }
     document.addEventListener('visibilitychange', f)
@@ -332,8 +332,14 @@ function Budgie({ onLock }) {
   }, [pinSet])
   useEffect(() => {
     if (!revealed) return
-    const t = setTimeout(() => setRevealed(false), REVEAL_MS)
-    return () => clearTimeout(t)
+    let last = Date.now()
+    const touch = () => { last = Date.now() }
+    const check = () => { if (Date.now() - last > REVEAL_MS) setRevealed(false) }
+    const evs = ['pointerdown', 'keydown', 'scroll']
+    evs.forEach(e => window.addEventListener(e, touch, true))
+    const t = setInterval(check, 5000)
+    document.addEventListener('visibilitychange', check)
+    return () => { evs.forEach(e => window.removeEventListener(e, touch, true)); clearInterval(t); document.removeEventListener('visibilitychange', check) }
   }, [revealed])
   const [pockets, setPockets] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, balance: 0 })))
   const [txs, setTxs] = useStore('budgie.txs', [])

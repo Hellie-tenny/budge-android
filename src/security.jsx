@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 
 export const PIN_LEN = 4              // 6 makes offline guessing far harder
 export const LOCK_AFTER_MS = 30000    // lock after being away this long (0 = immediately)
-export const REVEAL_MS = 60000        // amounts hide again this long after a reveal
+export const REVEAL_MS = 120000       // amounts hide again after this much inactivity
 export const REVEAL_ON_UNLOCK = false // true = opening the app with the PIN also shows amounts
 
 // mk() in App.jsx reads this flag. Budgie sets it on every render.
