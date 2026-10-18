@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { ymd, toISO, dueDates, describeRule, wrapBackup, checkBackup } from './logic.js'
+import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup } from './logic.js'
 
 // Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -26,8 +26,8 @@ const useCats = () => useContext(CatCtx)
 const PC = ['#3d7ddd', '#42a542', '#8f8fe0', '#f59f00', '#e8590c']
 const mk = n => mask.on ? 'MK ••••' : (n < 0 ? '-MK ' : 'MK ') + Math.abs(Math.round(n)).toLocaleString()
 const uid = () => Math.random().toString(36).slice(2, 9)
-const month = d => d.slice(0, 7)
-const mKey = (off = 0) => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - off); return d.toISOString().slice(0, 7) }
+const month = monthKey
+const mKey = (off = 0) => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - off); return monthKey(d) }
 const thisMonth = () => mKey(0)
 const net = t => (t.type === 'in' ? t.amount : t.type === 'out' || t.type === 'sv' ? -t.amount : 0)
 const tint = (t, c) => (t.type === 'out' ? c.color : t.type === 'in' ? '#42a542' : t.type === 'sv' ? '#f59f00' : '#3d7ddd')
@@ -65,6 +65,8 @@ const Chip = ({ id, color }) => {
     </span>
   )
 }
+// Charts show how big amounts are compared with each other, so they are replaced while amounts are hidden.
+const Hide = ({ className = '', children }) => mask.on ? <div className={'grid shrink-0 place-items-center rounded-2xl bg-paper px-3 text-center text-xs text-slate-500 ' + className}>Hidden until you show amounts</div> : children
 const field = 'w-full rounded-2xl bg-paper px-4 py-3 outline-none focus:ring-2 focus:ring-azure/40'
 
 function TxRow({ t, onDelete, onEdit }) {
@@ -127,7 +129,7 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
         <h3 className="mb-3 font-semibold">Where your money went</h3>
         {byCat.length === 0 ? <p className="text-sm text-slate-500">No spending yet this month. Tap + to add an expense.</p> : (
           <div className="flex items-center gap-4">
-            <Donut data={byCat} />
+            <Hide className="h-32 w-32"><Donut data={byCat} /></Hide>
             <ul className="flex-1 space-y-1.5 text-sm">{byCat.map(d => <li key={d.id} className="flex justify-between"><span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />{d.name}</span><span>{mk(d.value)}</span></li>)}</ul>
           </div>
         )}
@@ -159,7 +161,7 @@ function Activity({ txs, onDelete, onEdit }) {
 function Insights({ txs, pockets }) {
   const [which, setWhich] = useState(0)
   const { get } = useCats()
-  const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: d.toISOString().slice(0, 7), label: d.toLocaleString('en', { month: 'short' }) } })
+  const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: monthKey(d), label: d.toLocaleString('en', { month: 'short' }) } })
   if (!txs.length) return <p className="mt-10 text-center text-slate-500">Add a few transactions and your charts will show up here.</p>
   const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type).reduce((a, t) => a + t.amount, 0)
   const data = months.map(m => ({ ...m, inc: sum(m.key, 'in'), out: sum(m.key, 'out') }))
@@ -175,21 +177,21 @@ function Insights({ txs, pockets }) {
     <div className="space-y-4">
       <Card>
         <h3 className="font-semibold">Income and spending</h3>
-        <svg viewBox="0 0 300 140" className="mt-2 w-full">
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full">
           {data.map((d, i) => <g key={d.key}>
             <rect x={14 + i * 48} y={110 - (d.inc / max) * 100} width="14" height={(d.inc / max) * 100} rx="4" fill="#42a542" />
             <rect x={30 + i * 48} y={110 - (d.out / max) * 100} width="14" height={(d.out / max) * 100} rx="4" fill="#ec4c4c" />
             <text x={30 + i * 48} y="130" textAnchor="middle" {...lab}>{d.label}</text>
           </g>)}
-        </svg>
+        </svg></Hide>
         <p className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-up" />Income</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-down" />Spending</span></p>
       </Card>
       <Card>
         <h3 className="font-semibold">Balance over time</h3>
-        <svg viewBox="0 0 300 130" className="mt-2 w-full">
+        <Hide className="mt-2 h-32 w-full"><svg viewBox="0 0 300 130" className="w-full">
           <polyline points={pts.map(p => p.join(',')).join(' ')} fill="none" stroke="#3d7ddd" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
           {pts.map((p, i) => <g key={i}><circle cx={p[0]} cy={p[1]} r="4" fill="#3d7ddd" /><text x={p[0]} y="125" textAnchor="middle" {...lab}>{months[i].label}</text></g>)}
-        </svg>
+        </svg></Hide>
       </Card>
       <Card>
         <div className="mb-3 flex items-center justify-between">
@@ -199,7 +201,7 @@ function Insights({ txs, pockets }) {
         {!cats.length && <p className="text-sm text-slate-500">No spending in this month.</p>}
         <div className="space-y-3">{cats.map(d => <div key={d.c}>
           <div className="flex justify-between text-sm"><span>{get(d.c).emoji || EMO[d.c]} {get(d.c).name}</span><span>{mk(d.v)}</span></div>
-          <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.v / cats[0].v) * 100 + '%', background: get(d.c).color }} /></div>
+          {!mask.on && <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.v / cats[0].v) * 100 + '%', background: get(d.c).color }} /></div>}
         </div>)}</div>
       </Card>
     </div>

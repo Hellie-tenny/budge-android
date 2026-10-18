@@ -7,6 +7,10 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
 // Local calendar day as yyyy-mm-dd
 export const ymd = d => { const x = new Date(d); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}` }
 
+// Calendar month (yyyy-mm) of a timestamp in local time. Reading the month straight off the UTC
+// string puts entries made just after midnight (or just before it, west of UTC) in the wrong month.
+export const monthKey = d => ymd(d).slice(0, 7)
+
 // Turns a chosen day into a timestamp. Keeps the original time if the day is unchanged,
 // uses the current time for today, and noon for any other day.
 export const toISO = (day, orig) => {
