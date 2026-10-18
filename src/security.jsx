@@ -30,10 +30,11 @@ export const hasPin = () => !!readMeta()
 let dek = null, chain = Promise.resolve()
 const cache = new Map()
 
-async function kek(secret, salt) {
-  const base = await crypto.subtle.importKey('raw', enc.encode(norm(secret)), 'PBKDF2', false, ['deriveKey'])
+async function kdf(str, salt) {
+  const base = await crypto.subtle.importKey('raw', enc.encode(str), 'PBKDF2', false, ['deriveKey'])
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'])
 }
+const kek = (secret, salt) => kdf(norm(secret), salt) // PINs and recovery codes ignore case and dashes
 async function wrap(key, secret) {
   const salt = rnd(16), iv = rnd(12)
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await kek(secret, salt), await crypto.subtle.exportKey('raw', key))
@@ -122,6 +123,17 @@ export async function disablePin() {
   lock()
 }
 
+// Password-protected backup files. The password is used exactly as typed (case counts).
+export async function sealBackup(text, password) {
+  const salt = rnd(16), iv = rnd(12)
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await kdf(password, salt), enc.encode(text))
+  return { app: 'budgie', enc: true, salt: b64(salt), iv: b64(iv), ct: b64(ct) }
+}
+export async function openBackup(env, password) {
+  try { return dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, await kdf(password, unb64(env.salt)), unb64(env.ct))) }
+  catch { throw new Error('Wrong password') }
+}
+
 // Storage used by useStore in App.jsx
 export function vaultGet(key, init) {
   if (cache.has(key)) return cache.get(key)
@@ -161,7 +173,7 @@ export function PinPad({ title, hint, onDone }) {
         {Array.from({ length: PIN_LEN }, (_, i) => <span key={i} className={'h-3.5 w-3.5 rounded-full border-2 border-azure ' + (i < pin.length ? 'bg-azure' : '')} />)}
       </div>
       <div className="mx-auto grid max-w-64 grid-cols-3 gap-3">
-        {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((k, i) => k === '' ? <span key={i} /> :
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', '⌫'].map((k, i) => k === '' ? <span key="gap" /> :
           <button key={k} onClick={() => k === '⌫' ? setPin(p => p.slice(0, -1)) : press(k)} className="h-14 rounded-full bg-paper text-xl font-semibold active:scale-95">{k}</button>)}
       </div>
     </div>

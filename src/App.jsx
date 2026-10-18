@@ -1,5 +1,6 @@
-import { useState, useEffect, createContext, useContext } from 'react'
-import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK } from './security.jsx'
+import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
+import { ymd, toISO, dueDates, describeRule, wrapBackup, checkBackup } from './logic.js'
 
 // Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -66,7 +67,7 @@ const Chip = ({ id, color }) => {
 }
 const field = 'w-full rounded-2xl bg-paper px-4 py-3 outline-none focus:ring-2 focus:ring-azure/40'
 
-function TxRow({ t, onDelete }) {
+function TxRow({ t, onDelete, onEdit }) {
   const c = useCats().get(t.category)
   const title = t.type === 'tr' ? 'Transfer' : t.note || c.name
   const sub = t.type === 'tr' ? `${t.pocket} to ${t.to}` : `${c.name} · ${t.pocket}`
@@ -76,7 +77,10 @@ function TxRow({ t, onDelete }) {
       <div className="min-w-0 flex-1"><p className="truncate font-medium">{title}</p><p className="truncate text-xs text-slate-500">{sub}</p></div>
       <div className="text-right">
         <p className={'font-semibold ' + (t.type === 'in' ? 'text-up' : t.type === 'out' ? '' : 'text-azure')}>{t.type === 'in' ? '+' : t.type === 'out' ? '-' : ''}{mk(t.amount)}</p>
-        {onDelete && <button className="text-xs text-down" onClick={() => confirm('Delete this transaction?') && onDelete(t)}>Delete</button>}
+        {(onDelete || onEdit) && <div className="flex justify-end gap-3 text-xs">
+          {onEdit && t.type !== 'sv' && <button className="text-azure" onClick={() => onEdit(t)}>Edit</button>}
+          {onDelete && <button className="text-down" onClick={() => confirm('Delete this transaction?') && onDelete(t)}>Delete</button>}
+        </div>}
       </div>
     </div>
   )
@@ -137,7 +141,7 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
   )
 }
 
-function Activity({ txs, onDelete }) {
+function Activity({ txs, onDelete, onEdit }) {
   const { get } = useCats()
   const [q, setQ] = useState(''), [f, setF] = useState('all')
   const list = txs.filter(t => (f === 'all' || t.type === f) && ((t.note || '') + get(t.category).name + t.pocket + (t.to || '')).toLowerCase().includes(q.toLowerCase()))
@@ -147,7 +151,7 @@ function Activity({ txs, onDelete }) {
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search transactions" className={field + ' bg-surface'} />
       <div className="my-3 flex gap-2">{[['all', 'All'], ['in', 'Income'], ['out', 'Expenses']].map(([k, l]) => <button key={k} onClick={() => setF(k)} className={'rounded-full px-4 py-1.5 text-sm font-medium ' + (f === k ? 'bg-azure text-white' : 'bg-surface text-slate-500')}>{l}</button>)}</div>
       {!list.length && <p className="mt-10 text-center text-slate-500">{txs.length ? 'Nothing matches.' : 'No transactions yet. Tap + to add one.'}</p>}
-      {list.map(t => { const l = dayLabel(t.date), head = l !== last; last = l; return <div key={t.id}>{head && <p className="mb-1 mt-4 text-sm font-semibold text-slate-500">{l}</p>}<Card className="py-0.5! mb-2"><TxRow t={t} onDelete={onDelete} /></Card></div> })}
+      {list.map(t => { const l = dayLabel(t.date), head = l !== last; last = l; return <div key={t.id}>{head && <p className="mb-1 mt-4 text-sm font-semibold text-slate-500">{l}</p>}<Card className="py-0.5! mb-2"><TxRow t={t} onDelete={onDelete} onEdit={onEdit} /></Card></div> })}
     </div>
   )
 }
@@ -267,33 +271,38 @@ const Save = ({ onClick, children, off }) => <button disabled={off} onClick={onC
 const Amount = ({ value, onChange }) => <input autoFocus type="number" inputMode="numeric" value={value} onChange={e => onChange(e.target.value)} placeholder="MK 0" className="w-full bg-transparent py-3 text-center text-4xl font-bold outline-none placeholder:text-mist" />
 const Pick = ({ value, onChange, pockets, label }) => <label className="block text-xs text-slate-500">{label}<select value={value} onChange={e => onChange(e.target.value)} className={field + ' mt-1 text-base text-ink'}>{pockets.map(p => <option key={p.id}>{p.name}</option>)}</select></label>
 
-function AddSheet({ pockets, txs, onSave, onNewCat, onClose }) {
-  const { pick } = useCats()
-  const [type, setType] = useState('out'), [amount, setAmount] = useState(''), [pocket, setPocket] = useState(pockets[0].name), [to, setTo] = useState((pockets[1] || pockets[0]).name), [category, setCategory] = useState(() => pick('out')[0]?.id || 'Other'), [note, setNote] = useState(''), [adding, setAdding] = useState(false)
-  const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to)
-  const save = () => onSave({ id: uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: new Date().toISOString() })
+function AddSheet({ pockets, txs, edit, onSave, onNewCat, onClose }) {
+  const { pick, get } = useCats()
+  const [type, setType] = useState(edit?.type || 'out'), [amount, setAmount] = useState(edit ? String(edit.amount) : ''), [pocket, setPocket] = useState(edit?.pocket || pockets[0].name), [to, setTo] = useState(edit?.to || (pockets[1] || pockets[0]).name)
+  const [category, setCategory] = useState(() => (edit && edit.type !== 'tr' ? edit.category : pick('out')[0]?.id || 'Other')), [note, setNote] = useState(edit?.note || ''), [adding, setAdding] = useState(false), [day, setDay] = useState(ymd(edit?.date || new Date()))
+  const today = ymd(new Date())
+  const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to) || !day || day > today
+  const save = () => onSave({ ...(edit || {}), id: edit?.id || uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: toISO(day, edit?.date) })
   const notes = [...new Set(txs.filter(t => t.type === type && t.note && t.note !== 'Opening balance').map(t => t.note))].slice(0, 20)
+  const opts = pick(type), shown = type !== 'tr' && !opts.some(c => c.id === category) ? [get(category), ...opts] : opts // keep a hidden category visible while editing its transaction
   if (adding) return <Sheet onClose={() => setAdding(false)}><CatForm init={{ kind: type }} fixedKind onCancel={() => setAdding(false)} onSave={c => { onNewCat(c); setCategory(c.id); setAdding(false) }} /></Sheet>
   return (
     <Sheet onClose={onClose}>
-      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-paper p-1">
+      {edit ? <h3 className="text-center font-semibold">Edit {type === 'out' ? 'expense' : type === 'in' ? 'income' : 'transfer'}</h3> : <div className="grid grid-cols-3 gap-1 rounded-2xl bg-paper p-1">
         {[['out', 'Expense'], ['in', 'Income'], ['tr', 'Transfer']].map(([k, l]) => <button key={k} onClick={() => { setType(k); setCategory(pick(k === 'in' ? 'in' : 'out')[0]?.id || 'Other') }} className={'rounded-xl py-2 text-sm font-semibold ' + (type === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
-      </div>
+      </div>}
       <Amount value={amount} onChange={setAmount} />
       {type !== 'tr' && <div className="flex flex-wrap gap-2">
-        {pick(type).map(c => <button key={c.id} onClick={() => setCategory(c.id)} className={'rounded-full px-3 py-1.5 text-sm ' + (category === c.id ? 'bg-azure text-white' : 'bg-paper')}>{c.emoji || EMO[c.id]} {c.name}</button>)}
+        {shown.map(c => <button key={c.id} onClick={() => setCategory(c.id)} className={'rounded-full px-3 py-1.5 text-sm ' + (category === c.id ? 'bg-azure text-white' : 'bg-paper')}>{c.emoji || EMO[c.id]} {c.name}</button>)}
         <button onClick={() => setAdding(true)} className="rounded-full border border-dashed border-azure px-3 py-1.5 text-sm font-semibold text-azure">+ New</button>
       </div>}
       <div className="grid grid-cols-2 gap-2">
         <Pick label={type === 'tr' ? 'From' : 'Account'} value={pocket} onChange={setPocket} pockets={pockets} />
         {type === 'tr' && <Pick label="To" value={to} onChange={setTo} pockets={pockets} />}
+        <label className={'block text-xs text-slate-500 ' + (type === 'tr' ? 'col-span-2' : '')}>Date<input type="date" value={day} max={today} onChange={e => setDay(e.target.value)} className={field + ' mt-1 text-base text-ink'} /></label>
       </div>
       {type !== 'tr' && <>
         <input list="recent-notes" value={note} onChange={e => setNote(e.target.value)} placeholder={type === 'out' ? 'What was it? e.g. Lunch at Shoprite' : 'Where is it from? e.g. March salary'} className={field} />
         <datalist id="recent-notes">{notes.map(n => <option key={n} value={n} />)}</datalist>
       </>}
       {type === 'tr' && pocket === to && <p className="text-sm text-down">Pick two different accounts.</p>}
-      <Save off={bad} onClick={save}>{type === 'out' ? 'Save expense' : type === 'in' ? 'Save income' : 'Transfer'}</Save>
+      {day > today && <p className="text-sm text-down">Pick today or an earlier date.</p>}
+      <Save off={bad} onClick={save}>{edit ? 'Save changes' : type === 'out' ? 'Save expense' : type === 'in' ? 'Save income' : 'Transfer'}</Save>
     </Sheet>
   )
 }
@@ -418,8 +427,234 @@ function SecuritySheet({ onClose, onChange }) {
   )
 }
 
-const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['goals', 'Goals']]
-const ICONS = { home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', goals: 'M4 22V4M4 4h14l-3 5 3 5H4', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
+function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, onBuy, onUnbuy }) {
+  const [seg, setSeg] = useState('shop')
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-surface p-1">
+        {[['shop', 'Shopping'], ['goals', 'Goals']].map(([k, l]) => <button key={k} onClick={() => setSeg(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (seg === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+      </div>
+      {seg === 'shop' ? <Shopping shop={shop} setShop={setShop} budgets={budgets} txs={txs} pockets={pockets} onBuy={onBuy} onUnbuy={onUnbuy} /> : <Goals goals={goals} setGoals={setGoals} onFund={onFund} />}
+    </div>
+  )
+}
+
+// A shopping list is a plan: nothing changes in your balances until you tick an item as bought.
+function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
+  const { active, get } = useCats()
+  const [name, setName] = useState(''), [est, setEst] = useState(''), [cat, setCat] = useState('')
+  const cats = active('out'), catId = cats.some(c => c.id === cat) ? cat : (cats.find(c => c.id === 'Shopping') || cats[0])?.id || 'Other'
+  const add = () => { if (!name.trim()) return; setShop([...shop, { id: uid(), name: name.trim(), est: Number(est) || 0, category: catId, done: false }]); setName(''); setEst('') }
+  const todo = shop.filter(i => !i.done), bought = shop.filter(i => i.done)
+  const planned = todo.reduce((a, i) => a + i.est, 0), total = pockets.reduce((a, p) => a + p.balance, 0)
+  const spentIn = id => txs.filter(t => t.type === 'out' && t.category === id && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
+  const need = {}
+  todo.forEach(i => { need[i.category] = (need[i.category] || 0) + i.est })
+  const warn = Object.entries(need).filter(([id, n]) => budgets[id] > 0 && n > budgets[id] - spentIn(id)).map(([id, n]) => `${get(id).name}: this list needs ${mk(n)}, but only ${mk(Math.max(0, budgets[id] - spentIn(id)))} is left in that budget.`)
+  const paid = i => txs.find(t => t.id === i.txId)?.amount ?? i.est
+  const row = i => (
+    <div key={i.id} className="flex items-center gap-3 py-2.5">
+      <button aria-label={i.done ? 'Undo purchase' : 'Mark as bought'} onClick={() => (i.done ? onUnbuy(i) : onBuy(i))} className={'grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 text-sm ' + (i.done ? 'border-up bg-up text-white' : 'border-azure')}>{i.done && '✓'}</button>
+      <div className="min-w-0 flex-1">
+        <p className={'truncate font-medium ' + (i.done ? 'text-slate-400 line-through' : '')}>{i.name}</p>
+        <p className="truncate text-xs text-slate-500">{get(i.category).name}</p>
+      </div>
+      <p className="text-sm font-semibold">{i.done ? mk(paid(i)) : i.est ? mk(i.est) : ''}</p>
+      <button aria-label="Remove item" onClick={() => setShop(shop.filter(x => x.id !== i.id))} className="px-1 text-slate-400">✕</button>
+    </div>
+  )
+  return (
+    <div className="space-y-3">
+      <Card className="space-y-2">
+        <div className="flex gap-2">
+          <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Item, e.g. Maize flour" className={field + ' min-w-0 flex-1 py-2!'} />
+          <input value={est} type="number" inputMode="numeric" onChange={e => setEst(e.target.value)} placeholder="Price" className={field + ' w-24! py-2!'} />
+          <button onClick={add} className="rounded-2xl bg-azure px-4 font-semibold text-white">Add</button>
+        </div>
+        <select aria-label="Category" value={catId} onChange={e => setCat(e.target.value)} className={field + ' py-2! text-base text-ink'}>{cats.map(c => <option key={c.id} value={c.id}>{c.emoji || EMO[c.id] || ''} {c.name}</option>)}</select>
+      </Card>
+      {planned > 0 && <Card>
+        <p className="text-sm text-slate-500">Planned</p>
+        <p className="text-3xl font-bold">{mk(planned)}</p>
+        <p className={'mt-1 text-sm ' + (planned > total ? 'text-down' : 'text-slate-500')}>{planned > total ? `${mk(planned - total)} more than your total balance` : `${mk(total - planned)} left of your ${mk(total)} after this list`}</p>
+        {warn.map(w => <p key={w} className="mt-1 text-sm text-down">{w}</p>)}
+      </Card>}
+      {shop.length === 0 && <p className="mt-6 text-center text-slate-500">Plan what you're going to buy. Tick items as you buy them and the money comes off your balance.</p>}
+      {todo.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{todo.map(row)}</Card>}
+      {bought.length > 0 && <>
+        <div className="flex items-center justify-between px-1"><p className="text-sm font-semibold text-slate-500">Bought</p><button onClick={() => setShop(shop.filter(i => !i.done))} className="text-sm font-semibold text-azure">Clear bought</button></div>
+        <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{bought.map(row)}</Card>
+      </>}
+    </div>
+  )
+}
+
+function BuySheet({ item, pockets, onSave, onClose }) {
+  const { get } = useCats()
+  const [amount, setAmount] = useState(item.est ? String(item.est) : ''), [pocket, setPocket] = useState(pockets[0].name)
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Bought {item.name}?</h3>
+      <p className="text-center text-sm text-slate-500">{get(item.category).name} · comes off your balance</p>
+      <Amount value={amount} onChange={setAmount} />
+      <Pick label="Paid from" value={pocket} onChange={setPocket} pockets={pockets} />
+      <Save off={!(Number(amount) > 0)} onClick={() => onSave({ id: uid(), type: 'out', amount: Number(amount), pocket, category: item.category, note: item.name, shopId: item.id, date: new Date().toISOString() })}>Save purchase</Save>
+    </Sheet>
+  )
+}
+
+const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+
+function MoreSheet({ lastBackup, onPick, onClose }) {
+  const rows = [
+    ['backup', '💾', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
+    ['recurring', '🔁', 'Recurring transactions', 'Rent, salary, regular top-ups'],
+    ['cats', '🏷️', 'Categories', 'Add, rename or hide'],
+  ]
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">More</h3>
+      {rows.map(([k, e, l, sub]) => <button key={k} onClick={() => onPick(k)} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left active:bg-paper"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-paper text-xl">{e}</span><span className="min-w-0 flex-1"><span className="block font-medium">{l}</span><span className="block text-xs text-slate-500">{sub}</span></span><span className="text-slate-400">›</span></button>)}
+    </Sheet>
+  )
+}
+
+const readText = f => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsText(f) })
+const download = (name, text) => {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' })); a.download = name
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+
+function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
+  const [mode, setMode] = useState('menu'), [pw, setPw] = useState(''), [err, setErr] = useState(''), [busy, setBusy] = useState(false), [env, setEnv] = useState(null), [found, setFound] = useState(null)
+  const backup = async () => {
+    setBusy(true); setErr('')
+    try {
+      let text = JSON.stringify(wrapBackup(data))
+      if (pw) text = JSON.stringify(await sealBackup(text, pw))
+      download(`budgie-backup-${ymd(new Date())}${pw ? '.budgie' : '.json'}`, text)
+      onBackedUp(new Date().toISOString()); setMode('done')
+    } catch { setErr('Could not create the backup.') }
+    setBusy(false)
+  }
+  const load = obj => { const bad = checkBackup(obj?.data); bad ? setErr(bad) : setFound(obj) }
+  const choose = async f => {
+    setErr(''); setFound(null); setEnv(null); setPw('')
+    if (!f) return
+    try { const obj = JSON.parse(await readText(f)); if (obj?.app !== 'budgie') throw new Error('x'); obj.enc ? setEnv(obj) : load(obj) } catch { setErr("That doesn't look like a Budgie backup.") }
+  }
+  const openFile = async () => { setBusy(true); setErr(''); try { load(JSON.parse(await openBackup(env, pw))) } catch { setErr('Wrong password.') } setBusy(false) }
+  const back = <button onClick={() => { setMode('menu'); setErr(''); setPw(''); setEnv(null); setFound(null) }} className="w-full py-1 text-sm font-semibold text-azure">Back</button>
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Backup and restore</h3>
+      {mode === 'menu' && <>
+        <p className="text-center text-sm text-slate-500">Your data is stored only on this device. If you clear the browser or lose the phone, it's gone. Back up now and then, and keep the file somewhere safe, like your email.</p>
+        <Save onClick={() => setMode('export')}>Back up now</Save>
+        <button onClick={() => setMode('import')} className="w-full py-2 font-semibold text-azure">Restore from a file</button>
+      </>}
+      {mode === 'export' && <>
+        <p className="text-sm text-slate-500">Add a password to lock the file. Without one, anyone who gets the file can read all your finances.</p>
+        <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Password (optional, recommended)" autoComplete="new-password" className={field} />
+        {pw && pw.length < 6 && <p className="text-sm text-down">Use at least 6 characters.</p>}
+        {pw && <p className="text-xs text-slate-500">If you forget this password, the backup can't be opened. There is no way to recover it.</p>}
+        {err && <p className="text-sm text-down">{err}</p>}
+        <Save off={busy || (!!pw && pw.length < 6)} onClick={backup}>Download backup</Save>
+        {back}
+      </>}
+      {mode === 'done' && <>
+        <p className="text-center text-sm text-slate-500">Backup saved to your downloads. Keep it somewhere safe.</p>
+        <Save onClick={onClose}>Done</Save>
+      </>}
+      {mode === 'import' && <>
+        {!found && !env && <>
+          <p className="text-sm text-slate-500">Choose a Budgie backup file (.json or .budgie).</p>
+          <input type="file" accept=".json,.budgie,application/json" onChange={e => choose(e.target.files[0])} className="w-full text-sm" />
+        </>}
+        {env && !found && <>
+          <p className="text-sm text-slate-500">This backup is password protected.</p>
+          <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Password" autoComplete="off" className={field} />
+          <Save off={busy || !pw} onClick={openFile}>Unlock backup</Save>
+        </>}
+        {found && <>
+          <p className="rounded-2xl bg-paper p-3 text-sm">Backup from {new Date(found.exported).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}: {found.data.txs.length} transactions, {found.data.pockets.length} accounts.</p>
+          <p className="text-sm text-down">Restoring replaces everything currently in the app.</p>
+          <Save onClick={() => confirm(`Replace everything in the app with this backup (${found.data.txs.length} transactions, ${found.data.pockets.length} accounts)?`) && onRestore(found.data)}>Replace my data</Save>
+        </>}
+        {err && <p className="text-sm text-down">{err}</p>}
+        {back}
+      </>}
+    </Sheet>
+  )
+}
+
+function RecurForm({ init, pockets, onSave, onDelete, onCancel }) {
+  const { pick, get } = useCats()
+  const [type, setType] = useState(init.type || 'out'), [amount, setAmount] = useState(init.amount ? String(init.amount) : ''), [pocket, setPocket] = useState(init.pocket || pockets[0].name)
+  const [category, setCategory] = useState(init.category || (() => pick(init.type || 'out')[0]?.id || 'Other')), [note, setNote] = useState(init.note || ''), [freq, setFreq] = useState(init.freq || 'monthly'), [start, setStart] = useState(init.start || ymd(new Date()))
+  const opts = pick(type), shown = opts.some(c => c.id === category) ? opts : [get(category), ...opts]
+  const day = freq === 'weekly' ? new Date(start + 'T12:00:00').getDay() : Number(start.slice(8))
+  const rule = { ...init, id: init.id || uid(), type, amount: Number(amount), pocket, category, note: note.trim(), freq, day, start, last: init.last || null }
+  const backlog = dueDates({ ...rule, last: init.last || null }, ymd(new Date())).length
+  const bad = !(Number(amount) > 0) || !start
+  const save = () => { if (backlog > 12 && !init.id && !confirm(`The first date is in the past, so this adds ${backlog} transactions right now. Continue?`)) return; onSave(rule) }
+  return (
+    <div className="space-y-3">
+      <h3 className="text-center font-semibold">{init.id ? 'Edit recurring' : 'New recurring'}</h3>
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-paper p-1">
+        {[['out', 'Expense'], ['in', 'Income']].map(([k, l]) => <button key={k} onClick={() => { setType(k); setCategory(pick(k)[0]?.id || 'Other') }} className={'rounded-xl py-2 text-sm font-semibold ' + (type === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+      </div>
+      <Amount value={amount} onChange={setAmount} />
+      <div className="flex flex-wrap gap-2">{shown.map(c => <button key={c.id} onClick={() => setCategory(c.id)} className={'rounded-full px-3 py-1.5 text-sm ' + (category === c.id ? 'bg-azure text-white' : 'bg-paper')}>{c.emoji || EMO[c.id]} {c.name}</button>)}</div>
+      <Pick label="Account" value={pocket} onChange={setPocket} pockets={pockets} />
+      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Name, e.g. Rent" className={field} />
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-paper p-1">
+        {[['weekly', 'Every week'], ['monthly', 'Every month']].map(([k, l]) => <button key={k} onClick={() => setFreq(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (freq === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+      </div>
+      <label className="block text-xs text-slate-500">First date<input type="date" value={start} onChange={e => setStart(e.target.value)} className={field + ' mt-1 text-base text-ink'} /></label>
+      {start && <p className="text-center text-sm text-slate-500">Repeats {describeRule(rule)}, starting {niceDate(start)}.</p>}
+      <Save off={bad} onClick={save}>Save</Save>
+      {onDelete && <button onClick={onDelete} className="w-full py-1 font-semibold text-down">Delete recurring</button>}
+      <button onClick={onCancel} className="w-full py-1 text-sm font-semibold text-azure">Cancel</button>
+    </div>
+  )
+}
+
+function RecurSheet({ rules, pockets, onSave, onDelete, onNeedPin, onClose }) {
+  const { get } = useCats()
+  const [editing, setEditing] = useState(null)
+  if (editing) return (
+    <Sheet onClose={onClose}>
+      <RecurForm init={editing} pockets={pockets} onCancel={() => setEditing(null)} onSave={r => { onSave(r); setEditing(null) }}
+        onDelete={editing.id ? () => { if (confirm('Delete this recurring entry? Transactions already added stay in your history.')) { onDelete(editing.id); setEditing(null) } } : null} />
+    </Sheet>
+  )
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Recurring</h3>
+      <p className="text-center text-sm text-slate-500">These are added to your transactions automatically on their due dates.</p>
+      <div className="max-h-[50dvh] space-y-1 overflow-y-auto">
+        {rules.length === 0 && <p className="py-4 text-center text-slate-500">Nothing yet. Add rent, salary or regular top-ups.</p>}
+        {rules.map(r => {
+          const next = dueDates(r, ymd(Date.now() + 400 * 864e5))[0]
+          return (
+            <button key={r.id} onClick={() => (mask.on ? onNeedPin() : setEditing(r))} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left active:bg-paper">
+              <Chip id={r.category} color={r.type === 'in' ? '#42a542' : undefined} />
+              <span className="min-w-0 flex-1"><span className="block truncate font-medium">{r.note || get(r.category).name}</span><span className="block truncate text-xs text-slate-500">{describeRule(r)}{next ? ' · next ' + niceDate(next) : ''}</span></span>
+              <span className="text-sm font-semibold">{r.type === 'in' ? '+' : '-'}{mk(r.amount)}</span>
+            </button>
+          )
+        })}
+      </div>
+      <Save onClick={() => setEditing({ type: 'out' })}>New recurring</Save>
+    </Sheet>
+  )
+}
+
+const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['plan', 'Plan']]
+const ICONS = { home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
 function Budgie({ onLock }) {
@@ -451,11 +686,19 @@ function Budgie({ onLock }) {
   const [budgets, setBudgets] = useStore('budgie.budgets', {})
   const [goals, setGoals] = useStore('budgie.goals', [])
   const [cats, setCats] = useStore('budgie.cats', DEFAULT_CATS)
+  const [shop, setShop] = useStore('budgie.shop', [])
+  const [recurring, setRecurring] = useStore('budgie.recurring', [])
+  const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
+  const [notice, setNotice] = useState('')
+  const recRef = useRef(recurring)
+  recRef.current = recurring
+  const runRef = useRef(null)
   const uses = {}
   txs.forEach(t => { uses[t.category] = (uses[t.category] || 0) + 1 })
   const byId = new Map(cats.map(c => [c.id, c]))
   const active = kind => cats.filter(c => !c.archived && (c.kind === kind || c.kind === 'both'))
   const catApi = { list: cats, active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id, name: id, color: '#868e96' } }
+  const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date)) // newest first, even when backdated
   const addCat = c => setCats(cs => [...cs, c])
   const editCat = c => setCats(cs => cs.map(x => x.id === c.id ? c : x))
   const dropCat = id => { // used categories are hidden (history keeps working), unused ones are deleted
@@ -465,13 +708,55 @@ function Budgie({ onLock }) {
   }
   const apply = (t, s) => setPockets(ps => ps.map(p => { let d = 0; if (p.name === t.pocket) d += t.type === 'in' ? t.amount : -t.amount; if (t.type === 'tr' && p.name === t.to) d += t.amount; return d ? { ...p, balance: p.balance + s * d } : p }))
   const save = t => { apply(t, 1); setTxs(x => [t, ...x]); setSheet(null) }
-  const del = t => { apply(t, -1); setTxs(x => x.filter(y => y.id !== t.id)); if (t.type === 'sv') setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: Math.max(0, g.saved - t.amount) } : g)) }
+  const del = t => { apply(t, -1); setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)); if (t.type === 'sv') setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: Math.max(0, g.saved - t.amount) } : g)) }
+  const update = (o, t) => { apply(o, -1); apply(t, 1); setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
+  const needPin = next => setSheet(mask.on ? { pin: next } : next) // sheets that show real amounts ask for the PIN first while amounts are hidden
+  const buy = t => { save(t); setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, txId: t.id } : i)) }
+  const unbuy = i => {
+    const t = txs.find(x => x.id === i.txId)
+    if (!confirm(t ? `Undo this purchase? The ${mk(t.amount)} expense will be removed and the money returned to ${t.pocket}.` : 'Mark this item as not bought?')) return
+    if (t) del(t); else setShop(items => items.map(x => x.id === i.id ? { ...x, done: false, txId: undefined } : x))
+  }
   const fund = t => { save(t); setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: g.saved + t.amount } : g)) }
   const addAccount = (name, bal) => {
     setPockets(ps => [...ps, { id: uid(), name, balance: 0 }])
     if (bal) save({ id: uid(), type: 'in', amount: bal, pocket: name, category: 'Other', note: 'Opening balance', date: new Date().toISOString() })
     setSheet(null)
   }
+  // Recurring: posts every occurrence that has come due. recRef is updated at once, so running it twice never double-posts.
+  const runRec = () => {
+    const today = ymd(new Date()), posts = [], names = []
+    const next = recRef.current.map(r => {
+      const ds = dueDates(r, today)
+      if (!ds.length) return r
+      ds.forEach(d => posts.push({ id: uid(), type: r.type, amount: r.amount, pocket: r.pocket, category: r.category, note: r.note, recurId: r.id, date: toISO(d) }))
+      names.push(r.note || catApi.get(r.category).name)
+      return { ...r, last: ds[ds.length - 1] }
+    })
+    if (!posts.length) return
+    recRef.current = next; setRecurring(next)
+    posts.forEach(t => apply(t, 1))
+    setTxs(x => [...posts, ...x])
+    setNotice(`Added ${posts.length} recurring transaction${posts.length > 1 ? 's' : ''}: ${[...new Set(names)].join(', ')}`)
+  }
+  runRef.current = runRec
+  useEffect(() => {
+    runRef.current()
+    const f = () => { if (!document.hidden) runRef.current() }
+    document.addEventListener('visibilitychange', f)
+    return () => document.removeEventListener('visibilitychange', f)
+  }, [])
+  const saveRule = r => {
+    recRef.current = recRef.current.some(x => x.id === r.id) ? recRef.current.map(x => x.id === r.id ? r : x) : [...recRef.current, r]
+    setRecurring(recRef.current); runRec()
+  }
+  const deleteRule = id => { recRef.current = recRef.current.filter(x => x.id !== id); setRecurring(recRef.current) }
+  const restore = d => {
+    setPockets(d.pockets); setTxs(d.txs); setBudgets(d.budgets || {}); setGoals(d.goals || []); setCats(d.cats?.length ? d.cats : DEFAULT_CATS); setShop(d.shop || [])
+    recRef.current = d.recurring || []; setRecurring(recRef.current)
+    setSheet(null); setNotice('Backup restored.'); runRec()
+  }
+  const backupData = { pockets, txs, budgets, goals, cats, shop, recurring }
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <CatCtx.Provider value={catApi}>
@@ -484,22 +769,30 @@ function Budgie({ onLock }) {
         <div className="flex gap-2 text-slate-500">
           {pinSet && <button onClick={() => revealed ? setRevealed(false) : setSheet('reveal')} aria-label={revealed ? 'Hide amounts' : 'Show amounts'} className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k={revealed ? 'eye' : 'eyeOff'} /></button>}
           <button onClick={() => setSheet('security')} aria-label="App lock" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="lock" /></button>
+          <button onClick={() => setSheet('more')} aria-label="More" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="more" /></button>
         </div>
       </header>
       <main className="flex-1 overflow-y-auto px-4 pb-36">
-        {tab === 'home' && <Home pockets={pockets} txs={txs} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
-        {tab === 'activity' && <Activity txs={txs} onDelete={del} />}
+        {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
+        {tab === 'home' && <Home pockets={pockets} txs={sorted} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
+        {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
         {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
-        {tab === 'goals' && <Goals goals={goals} setGoals={setGoals} onFund={g => setSheet({ fund: g })} />}
+        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoals} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} />}
       </main>
       <button onClick={() => setSheet('add')} aria-label="Add transaction" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5">
         {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold ' + (tab === k ? 'text-azure' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 ' + (tab === k ? 'bg-azure/15' : '')}><Icon k={k} /></span>{l}</button>)}
       </nav>
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} onSave={buy} onClose={() => setSheet(null)} />}
+      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
+      {sheet === 'recurring' && <RecurSheet rules={recurring} pockets={pockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
       {sheet === 'account' && <AccountSheet onSave={addAccount} onClose={() => setSheet(null)} />}
+      {sheet?.pin !== undefined && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(sheet.pin) }} /></Sheet>}
       {sheet === 'reveal' && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(null) }} /></Sheet>}
       {sheet === 'security' && <SecuritySheet onClose={() => setSheet(null)} onChange={() => setPinSet(hasPin())} />}
       {sheet?.fund && <FundSheet goal={sheet.fund} pockets={pockets} onSave={fund} onClose={() => setSheet(null)} />}
