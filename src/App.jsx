@@ -1,9 +1,27 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK } from './security.jsx'
 
-const CATS = { Food: '#e8590c', Transport: '#1c7ed6', Airtime: '#9c36b5', Bills: '#e03131', Shopping: '#d6336c', Health: '#2f9e44', Other: '#868e96' }
+// Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
+// Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
+const DEFAULT_CATS = [
+  { id: 'Food', name: 'Food', color: '#e8590c', kind: 'out' },
+  { id: 'Transport', name: 'Transport', color: '#1c7ed6', kind: 'out' },
+  { id: 'Airtime', name: 'Airtime', color: '#9c36b5', kind: 'out' },
+  { id: 'Bills', name: 'Bills', color: '#e03131', kind: 'out' },
+  { id: 'Shopping', name: 'Shopping', color: '#d6336c', kind: 'out' },
+  { id: 'Health', name: 'Health', color: '#2f9e44', kind: 'out' },
+  { id: 'Other', name: 'Other', color: '#868e96', kind: 'both' },
+  { id: 'Salary', name: 'Salary', color: '#42a542', kind: 'in' },
+  { id: 'Business', name: 'Business', color: '#0ca678', kind: 'in' },
+  { id: 'Gift', name: 'Gift', color: '#f59f00', kind: 'in' },
+]
+const SYSTEM = { Savings: { id: 'Savings', name: 'Savings', color: '#f59f00' }, Transfer: { id: 'Transfer', name: 'Transfer', color: '#3d7ddd' } }
 const EMO = { Food: '🍲', Transport: '🚌', Airtime: '📱', Bills: '💡', Shopping: '🛍️', Health: '💊', Other: '🧾', Salary: '💼', Business: '🏪', Gift: '🎁', Savings: '🎯', Transfer: '🔁' }
-const INCOME = ['Salary', 'Business', 'Gift', 'Other']
+const PALETTE = ['#e8590c', '#1c7ed6', '#9c36b5', '#e03131', '#d6336c', '#2f9e44', '#f59f00', '#0ca678', '#7048e8', '#868e96']
+const QUICK_EMOJI = ['🍲', '🚌', '📱', '💡', '🛍️', '💊', '🎓', '🏠', '🐾', '🎮', '☕', '🧴']
+const KIND = { out: 'Expense', in: 'Income', both: 'Both' }
+const CatCtx = createContext(null)
+const useCats = () => useContext(CatCtx)
 const PC = ['#3d7ddd', '#42a542', '#8f8fe0', '#f59f00', '#e8590c']
 const mk = n => mask.on ? 'MK ••••' : (n < 0 ? '-MK ' : 'MK ') + Math.abs(Math.round(n)).toLocaleString()
 const uid = () => Math.random().toString(36).slice(2, 9)
@@ -11,7 +29,7 @@ const month = d => d.slice(0, 7)
 const mKey = (off = 0) => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - off); return d.toISOString().slice(0, 7) }
 const thisMonth = () => mKey(0)
 const net = t => (t.type === 'in' ? t.amount : t.type === 'out' || t.type === 'sv' ? -t.amount : 0)
-const tint = t => (t.type === 'out' ? CATS[t.category] || '#868e96' : t.type === 'in' ? '#42a542' : t.type === 'sv' ? '#f59f00' : '#3d7ddd')
+const tint = (t, c) => (t.type === 'out' ? c.color : t.type === 'in' ? '#42a542' : t.type === 'sv' ? '#f59f00' : '#3d7ddd')
 const dayLabel = iso => {
   const d = new Date(iso), n = new Date(), y = new Date(); y.setDate(n.getDate() - 1)
   return d.toDateString() === n.toDateString() ? 'Today' : d.toDateString() === y.toDateString() ? 'Yesterday' : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
@@ -38,15 +56,23 @@ const CI = {
   Savings: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
   Transfer: 'M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3',
 }
-const Chip = ({ name, color }) => <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl" style={{ background: color + '26', color }}><svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={CI[name] || CI.Other} /></svg></span>
+const Chip = ({ id, color }) => {
+  const c = useCats().get(id), col = color || c.color
+  return (
+    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl" style={{ background: col + '26', color: col }}>
+      {c.emoji ? <span className="text-xl leading-none">{c.emoji}</span> : CI[c.id] ? <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={CI[c.id]} /></svg> : <b>{c.name[0]?.toUpperCase()}</b>}
+    </span>
+  )
+}
 const field = 'w-full rounded-2xl bg-paper px-4 py-3 outline-none focus:ring-2 focus:ring-azure/40'
 
 function TxRow({ t, onDelete }) {
-  const title = t.type === 'tr' ? 'Transfer' : t.note || t.category
-  const sub = t.type === 'tr' ? `${t.pocket} to ${t.to}` : `${t.category} · ${t.pocket}`
+  const c = useCats().get(t.category)
+  const title = t.type === 'tr' ? 'Transfer' : t.note || c.name
+  const sub = t.type === 'tr' ? `${t.pocket} to ${t.to}` : `${c.name} · ${t.pocket}`
   return (
     <div className="flex items-center gap-3 py-2.5">
-      <Chip name={t.category} color={tint(t)} />
+      <Chip id={t.category} color={tint(t, c)} />
       <div className="min-w-0 flex-1"><p className="truncate font-medium">{title}</p><p className="truncate text-xs text-slate-500">{sub}</p></div>
       <div className="text-right">
         <p className={'font-semibold ' + (t.type === 'in' ? 'text-up' : t.type === 'out' ? '' : 'text-azure')}>{t.type === 'in' ? '+' : t.type === 'out' ? '-' : ''}{mk(t.amount)}</p>
@@ -62,22 +88,23 @@ function Donut({ data }) {
   return (
     <svg viewBox="0 0 100 100" className="h-32 w-32 shrink-0 -rotate-90">
       <circle cx="50" cy="50" r="38" fill="none" stroke="#d7d7dd" opacity=".4" strokeWidth="14" />
-      {data.map(d => { const len = (d.value / total) * 238.76; const el = <circle key={d.name} cx="50" cy="50" r="38" fill="none" stroke={CATS[d.name]} strokeWidth="14" strokeDasharray={`${len} 238.76`} strokeDashoffset={-acc} />; acc += len; return el })}
+      {data.map(d => { const len = (d.value / total) * 238.76; const el = <circle key={d.id} cx="50" cy="50" r="38" fill="none" stroke={d.color} strokeWidth="14" strokeDasharray={`${len} 238.76`} strokeDashoffset={-acc} />; acc += len; return el })}
     </svg>
   )
 }
 
 function Home({ pockets, txs, budgets, setTab, onAccount }) {
+  const { get } = useCats()
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const m = txs.filter(t => month(t.date) === thisMonth())
   const inc = m.filter(t => t.type === 'in').reduce((a, t) => a + t.amount, 0)
   const spent = m.filter(t => t.type === 'out')
   const out = spent.reduce((a, t) => a + t.amount, 0)
-  const byCat = Object.keys(CATS).map(name => ({ name, value: spent.filter(t => t.category === name).reduce((a, t) => a + t.amount, 0) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
+  const byCat = [...new Set(spent.map(t => t.category))].map(id => ({ id, name: get(id).name, color: get(id).color, value: spent.filter(t => t.category === id).reduce((a, t) => a + t.amount, 0) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
   const lastOut = txs.filter(t => t.type === 'out' && month(t.date) === mKey(1)).reduce((a, t) => a + t.amount, 0)
-  const over = Object.entries(budgets).filter(([c, l]) => l > 0 && (byCat.find(d => d.name === c)?.value || 0) > l).map(([c]) => c)
+  const over = Object.entries(budgets).filter(([c, l]) => l > 0 && (byCat.find(d => d.id === c)?.value || 0) > l).map(([c]) => c)
   const limit = Object.values(budgets).reduce((a, b) => a + b, 0)
-  const used = Object.entries(budgets).filter(([, l]) => l > 0).reduce((a, [c]) => a + (byCat.find(d => d.name === c)?.value || 0), 0)
+  const used = Object.entries(budgets).filter(([, l]) => l > 0).reduce((a, [c]) => a + (byCat.find(d => d.id === c)?.value || 0), 0)
   const now = new Date(), left = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1
   return (
     <div className="space-y-4">
@@ -91,13 +118,13 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
         {pockets.map((p, i) => <div key={p.id} className="flex items-center gap-3 py-3"><span className="h-3 w-3 rounded-full" style={{ background: PC[i % 5] }} /><span className="flex-1">{p.name}</span><span className="font-semibold">{mk(p.balance)}</span></div>)}
         <button onClick={onAccount} className="w-full border-t border-black/5 pt-3 text-left text-sm font-semibold text-azure dark:border-white/5">+ Add account</button>
       </Card>
-      {over.length > 0 && <div className="rounded-2xl bg-down/10 p-3 text-sm text-down">Over budget: {over.join(', ')}</div>}
+      {over.length > 0 && <div className="rounded-2xl bg-down/10 p-3 text-sm text-down">Over budget: {over.map(c => get(c).name).join(', ')}</div>}
       <Card>
         <h3 className="mb-3 font-semibold">Where your money went</h3>
         {byCat.length === 0 ? <p className="text-sm text-slate-500">No spending yet this month. Tap + to add an expense.</p> : (
           <div className="flex items-center gap-4">
             <Donut data={byCat} />
-            <ul className="flex-1 space-y-1.5 text-sm">{byCat.map(d => <li key={d.name} className="flex justify-between"><span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: CATS[d.name] }} />{d.name}</span><span>{mk(d.value)}</span></li>)}</ul>
+            <ul className="flex-1 space-y-1.5 text-sm">{byCat.map(d => <li key={d.id} className="flex justify-between"><span className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-full" style={{ background: d.color }} />{d.name}</span><span>{mk(d.value)}</span></li>)}</ul>
           </div>
         )}
         {lastOut > 0 && <p className="mt-3 text-sm text-slate-500">{out <= lastOut ? `${mk(lastOut - out)} less` : `${mk(out - lastOut)} more`} than last month.</p>}
@@ -111,8 +138,9 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
 }
 
 function Activity({ txs, onDelete }) {
+  const { get } = useCats()
   const [q, setQ] = useState(''), [f, setF] = useState('all')
-  const list = txs.filter(t => (f === 'all' || t.type === f) && ((t.note || '') + t.category + t.pocket + (t.to || '')).toLowerCase().includes(q.toLowerCase()))
+  const list = txs.filter(t => (f === 'all' || t.type === f) && ((t.note || '') + get(t.category).name + t.pocket + (t.to || '')).toLowerCase().includes(q.toLowerCase()))
   let last = ''
   return (
     <div>
@@ -126,6 +154,7 @@ function Activity({ txs, onDelete }) {
 
 function Insights({ txs, pockets }) {
   const [which, setWhich] = useState(0)
+  const { get } = useCats()
   const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: d.toISOString().slice(0, 7), label: d.toLocaleString('en', { month: 'short' }) } })
   if (!txs.length) return <p className="mt-10 text-center text-slate-500">Add a few transactions and your charts will show up here.</p>
   const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type).reduce((a, t) => a + t.amount, 0)
@@ -135,7 +164,8 @@ function Insights({ txs, pockets }) {
   const bal = months.map(m => total - txs.filter(t => month(t.date) > m.key).reduce((a, t) => a + net(t), 0))
   const lo = Math.min(...bal), hi = Math.max(...bal)
   const pts = bal.map((v, i) => [30 + i * 48, 100 - ((v - lo) / (hi - lo || 1)) * 80])
-  const cats = Object.keys(CATS).map(c => ({ c, v: txs.filter(t => t.type === 'out' && t.category === c && month(t.date) === mKey(which)).reduce((a, t) => a + t.amount, 0) })).filter(d => d.v > 0).sort((a, b) => b.v - a.v)
+  const inMonth = txs.filter(t => t.type === 'out' && month(t.date) === mKey(which))
+  const cats = [...new Set(inMonth.map(t => t.category))].map(c => ({ c, v: inMonth.filter(t => t.category === c).reduce((a, t) => a + t.amount, 0) })).filter(d => d.v > 0).sort((a, b) => b.v - a.v)
   const lab = { fontSize: 10, fill: '#868e96' }
   return (
     <div className="space-y-4">
@@ -164,28 +194,32 @@ function Insights({ txs, pockets }) {
         </div>
         {!cats.length && <p className="text-sm text-slate-500">No spending in this month.</p>}
         <div className="space-y-3">{cats.map(d => <div key={d.c}>
-          <div className="flex justify-between text-sm"><span>{EMO[d.c]} {d.c}</span><span>{mk(d.v)}</span></div>
-          <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.v / cats[0].v) * 100 + '%', background: CATS[d.c] }} /></div>
+          <div className="flex justify-between text-sm"><span>{get(d.c).emoji || EMO[d.c]} {get(d.c).name}</span><span>{mk(d.v)}</span></div>
+          <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.v / cats[0].v) * 100 + '%', background: get(d.c).color }} /></div>
         </div>)}</div>
       </Card>
     </div>
   )
 }
 
-function Budgets({ budgets, setBudgets, txs }) {
+function Budgets({ budgets, setBudgets, txs, onManage }) {
+  const { active } = useCats()
   const spent = c => txs.filter(t => t.type === 'out' && t.category === c && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
   return (
     <div className="space-y-3">
-      <p className="text-sm text-slate-500">Set a monthly limit for each category. Leave it empty for no limit.</p>
-      {Object.keys(CATS).map(c => {
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-slate-500">Set a monthly limit for each category. Leave it empty for no limit.</p>
+        <button onClick={onManage} className="shrink-0 text-sm font-semibold text-azure">Edit categories</button>
+      </div>
+      {active('out').map(({ id: c, name, color }) => {
         const lim = budgets[c] || 0, s = spent(c), pct = lim ? Math.min(100, (s / lim) * 100) : 0, bad = lim && s > lim
         return (
           <Card key={c}>
             <div className="flex items-center gap-3">
-              <Chip name={c} color={CATS[c]} /><span className="flex-1 font-medium">{c}</span>
+              <Chip id={c} /><span className="flex-1 font-medium">{name}</span>
               <input type="number" inputMode="numeric" value={mask.on ? '' : lim || ''} placeholder={mask.on ? '••••' : 'No limit'} disabled={mask.on} onChange={e => setBudgets({ ...budgets, [c]: Number(e.target.value) })} className="w-28 rounded-xl bg-paper px-3 py-1.5 text-right outline-none focus:ring-2 focus:ring-azure/40" />
             </div>
-            <div className="mt-3 h-2 rounded-full bg-mist/40"><div className="h-2 rounded-full" style={{ width: pct + '%', background: bad ? '#ec4c4c' : CATS[c] }} /></div>
+            <div className="mt-3 h-2 rounded-full bg-mist/40"><div className="h-2 rounded-full" style={{ width: pct + '%', background: bad ? '#ec4c4c' : color }} /></div>
             <p className={'mt-1 text-xs ' + (bad ? 'text-down' : 'text-slate-500')}>{mk(s)} spent{lim ? ` of ${mk(lim)}` : ''}</p>
           </Card>
         )
@@ -224,7 +258,7 @@ function Goals({ goals, setGoals, onFund }) {
 
 const Sheet = ({ children, onClose }) => (
   <div className="fade-in fixed inset-0 z-30 flex items-end bg-black/50" onClick={onClose}>
-    <div className="sheet-in mx-auto w-full max-w-md space-y-3 rounded-t-[2rem] bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]" onClick={e => e.stopPropagation()}>
+    <div className="sheet-in mx-auto w-full max-w-md max-h-[92dvh] space-y-3 overflow-y-auto rounded-t-[2rem] bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]" onClick={e => e.stopPropagation()}>
       <div className="mx-auto mb-1 h-1.5 w-10 rounded-full bg-mist" />{children}
     </div>
   </div>
@@ -233,24 +267,95 @@ const Save = ({ onClick, children, off }) => <button disabled={off} onClick={onC
 const Amount = ({ value, onChange }) => <input autoFocus type="number" inputMode="numeric" value={value} onChange={e => onChange(e.target.value)} placeholder="MK 0" className="w-full bg-transparent py-3 text-center text-4xl font-bold outline-none placeholder:text-mist" />
 const Pick = ({ value, onChange, pockets, label }) => <label className="block text-xs text-slate-500">{label}<select value={value} onChange={e => onChange(e.target.value)} className={field + ' mt-1 text-base text-ink'}>{pockets.map(p => <option key={p.id}>{p.name}</option>)}</select></label>
 
-function AddSheet({ pockets, onSave, onClose }) {
-  const [type, setType] = useState('out'), [amount, setAmount] = useState(''), [pocket, setPocket] = useState(pockets[0].name), [to, setTo] = useState((pockets[1] || pockets[0]).name), [category, setCategory] = useState('Food'), [note, setNote] = useState('')
+function AddSheet({ pockets, txs, onSave, onNewCat, onClose }) {
+  const { pick } = useCats()
+  const [type, setType] = useState('out'), [amount, setAmount] = useState(''), [pocket, setPocket] = useState(pockets[0].name), [to, setTo] = useState((pockets[1] || pockets[0]).name), [category, setCategory] = useState(() => pick('out')[0]?.id || 'Other'), [note, setNote] = useState(''), [adding, setAdding] = useState(false)
   const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to)
   const save = () => onSave({ id: uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: new Date().toISOString() })
+  const notes = [...new Set(txs.filter(t => t.type === type && t.note && t.note !== 'Opening balance').map(t => t.note))].slice(0, 20)
+  if (adding) return <Sheet onClose={() => setAdding(false)}><CatForm init={{ kind: type }} fixedKind onCancel={() => setAdding(false)} onSave={c => { onNewCat(c); setCategory(c.id); setAdding(false) }} /></Sheet>
   return (
     <Sheet onClose={onClose}>
       <div className="grid grid-cols-3 gap-1 rounded-2xl bg-paper p-1">
-        {[['out', 'Expense'], ['in', 'Income'], ['tr', 'Transfer']].map(([k, l]) => <button key={k} onClick={() => { setType(k); setCategory(k === 'in' ? 'Salary' : 'Food') }} className={'rounded-xl py-2 text-sm font-semibold ' + (type === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+        {[['out', 'Expense'], ['in', 'Income'], ['tr', 'Transfer']].map(([k, l]) => <button key={k} onClick={() => { setType(k); setCategory(pick(k === 'in' ? 'in' : 'out')[0]?.id || 'Other') }} className={'rounded-xl py-2 text-sm font-semibold ' + (type === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
       </div>
       <Amount value={amount} onChange={setAmount} />
-      {type !== 'tr' && <div className="flex flex-wrap gap-2">{(type === 'out' ? Object.keys(CATS) : INCOME).map(c => <button key={c} onClick={() => setCategory(c)} className={'rounded-full px-3 py-1.5 text-sm ' + (category === c ? 'bg-azure text-white' : 'bg-paper')}>{EMO[c]} {c}</button>)}</div>}
+      {type !== 'tr' && <div className="flex flex-wrap gap-2">
+        {pick(type).map(c => <button key={c.id} onClick={() => setCategory(c.id)} className={'rounded-full px-3 py-1.5 text-sm ' + (category === c.id ? 'bg-azure text-white' : 'bg-paper')}>{c.emoji || EMO[c.id]} {c.name}</button>)}
+        <button onClick={() => setAdding(true)} className="rounded-full border border-dashed border-azure px-3 py-1.5 text-sm font-semibold text-azure">+ New</button>
+      </div>}
       <div className="grid grid-cols-2 gap-2">
         <Pick label={type === 'tr' ? 'From' : 'Account'} value={pocket} onChange={setPocket} pockets={pockets} />
         {type === 'tr' && <Pick label="To" value={to} onChange={setTo} pockets={pockets} />}
       </div>
-      {type !== 'tr' && <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)" className={field} />}
+      {type !== 'tr' && <>
+        <input list="recent-notes" value={note} onChange={e => setNote(e.target.value)} placeholder={type === 'out' ? 'What was it? e.g. Lunch at Shoprite' : 'Where is it from? e.g. March salary'} className={field} />
+        <datalist id="recent-notes">{notes.map(n => <option key={n} value={n} />)}</datalist>
+      </>}
       {type === 'tr' && pocket === to && <p className="text-sm text-down">Pick two different accounts.</p>}
       <Save off={bad} onClick={save}>{type === 'out' ? 'Save expense' : type === 'in' ? 'Save income' : 'Transfer'}</Save>
+    </Sheet>
+  )
+}
+
+const firstChar = s => { s = s.trim(); if (!s) return ''; return typeof Intl !== 'undefined' && Intl.Segmenter ? [...new Intl.Segmenter().segment(s)][0].segment : Array.from(s)[0] }
+
+// Create or edit one category. onDelete is optional (shown as a red button with deleteLabel).
+function CatForm({ init, fixedKind, onSave, onDelete, deleteLabel, onCancel }) {
+  const { list } = useCats()
+  const [name, setName] = useState(init.name || ''), [emoji, setEmoji] = useState(init.emoji || ''), [color, setColor] = useState(init.color || PALETTE[list.length % PALETTE.length]), [kind, setKind] = useState(init.kind || 'out')
+  const clean = name.trim()
+  const dup = list.some(c => c.id !== init.id && !c.archived && c.name.toLowerCase() === clean.toLowerCase() && (c.kind === kind || c.kind === 'both' || kind === 'both'))
+  return (
+    <div className="space-y-3">
+      <h3 className="text-center font-semibold">{init.id ? 'Edit category' : 'New category'}</h3>
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={24} placeholder="Name, e.g. School fees" className={field} />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input value={emoji} onChange={e => setEmoji(firstChar(e.target.value))} placeholder="Icon" aria-label="Icon (emoji)" className="w-16 rounded-xl bg-paper px-2 py-2 text-center text-xl outline-none focus:ring-2 focus:ring-azure/40" />
+        {QUICK_EMOJI.map(e => <button key={e} onClick={() => setEmoji(e)} className="rounded-lg bg-paper px-1.5 py-1 text-lg">{e}</button>)}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {PALETTE.map(c => <button key={c} onClick={() => setColor(c)} aria-label={'Color ' + c} className={'h-8 w-8 rounded-full ' + (color === c ? 'ring-2 ring-ink ring-offset-2 ring-offset-surface' : '')} style={{ background: c }} />)}
+      </div>
+      {!fixedKind && <div className="grid grid-cols-3 gap-1 rounded-2xl bg-paper p-1">
+        {Object.entries(KIND).map(([k, l]) => <button key={k} onClick={() => setKind(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (kind === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+      </div>}
+      {dup && <p className="text-sm text-down">You already have a category with that name.</p>}
+      <Save off={!clean || dup} onClick={() => onSave({ ...init, id: init.id || uid(), name: clean, color, kind, emoji: emoji || undefined })}>Save</Save>
+      {onDelete && <button onClick={onDelete} className="w-full py-1 font-semibold text-down">{deleteLabel}</button>}
+      <button onClick={onCancel} className="w-full py-1 text-sm font-semibold text-azure">Cancel</button>
+    </div>
+  )
+}
+
+function ManageCats({ onAdd, onEdit, onDrop, onClose }) {
+  const { list, uses } = useCats()
+  const [editing, setEditing] = useState(null) // null = the list, {} = new, a category = edit it
+  if (editing) {
+    const c = editing, n = c.id ? uses(c.id) : 0
+    return (
+      <Sheet onClose={onClose}>
+        <CatForm init={c} onCancel={() => setEditing(null)} onSave={x => { (c.id ? onEdit : onAdd)(x); setEditing(null) }}
+          deleteLabel={n ? 'Hide category' : 'Delete category'}
+          onDelete={c.id && c.id !== 'Other' ? () => {
+            const ok = confirm(n ? `"${c.name}" is used by ${n} transaction${n > 1 ? 's' : ''}. It will be hidden from the pickers, but your history stays. Hide it?` : `Delete "${c.name}"?`)
+            if (ok) { onDrop(c.id); setEditing(null) }
+          } : null} />
+      </Sheet>
+    )
+  }
+  const hidden = list.filter(c => c.archived)
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Categories</h3>
+      <div className="max-h-[50dvh] space-y-1 overflow-y-auto">
+        {list.filter(c => !c.archived).map(c => <button key={c.id} onClick={() => setEditing(c)} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left active:bg-paper"><Chip id={c.id} /><span className="flex-1 font-medium">{c.name}</span><span className="text-xs text-slate-500">{KIND[c.kind]}</span></button>)}
+        {hidden.length > 0 && <>
+          <p className="px-2 pt-3 text-xs font-semibold uppercase text-slate-500">Hidden</p>
+          {hidden.map(c => <div key={c.id} className="flex items-center gap-3 p-2"><Chip id={c.id} /><span className="flex-1 text-slate-500">{c.name}</span><button onClick={() => onEdit({ ...c, archived: false })} className="text-sm font-semibold text-azure">Restore</button></div>)}
+        </>}
+      </div>
+      <Save onClick={() => setEditing({ kind: 'out' })}>New category</Save>
     </Sheet>
   )
 }
@@ -345,6 +450,19 @@ function Budgie({ onLock }) {
   const [txs, setTxs] = useStore('budgie.txs', [])
   const [budgets, setBudgets] = useStore('budgie.budgets', {})
   const [goals, setGoals] = useStore('budgie.goals', [])
+  const [cats, setCats] = useStore('budgie.cats', DEFAULT_CATS)
+  const uses = {}
+  txs.forEach(t => { uses[t.category] = (uses[t.category] || 0) + 1 })
+  const byId = new Map(cats.map(c => [c.id, c]))
+  const active = kind => cats.filter(c => !c.archived && (c.kind === kind || c.kind === 'both'))
+  const catApi = { list: cats, active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id, name: id, color: '#868e96' } }
+  const addCat = c => setCats(cs => [...cs, c])
+  const editCat = c => setCats(cs => cs.map(x => x.id === c.id ? c : x))
+  const dropCat = id => { // used categories are hidden (history keeps working), unused ones are deleted
+    const used = txs.some(t => t.category === id)
+    setCats(cs => used ? cs.map(c => c.id === id ? { ...c, archived: true } : c) : cs.filter(c => c.id !== id))
+    setBudgets(b => { const n = { ...b }; delete n[id]; return n })
+  }
   const apply = (t, s) => setPockets(ps => ps.map(p => { let d = 0; if (p.name === t.pocket) d += t.type === 'in' ? t.amount : -t.amount; if (t.type === 'tr' && p.name === t.to) d += t.amount; return d ? { ...p, balance: p.balance + s * d } : p }))
   const save = t => { apply(t, 1); setTxs(x => [t, ...x]); setSheet(null) }
   const del = t => { apply(t, -1); setTxs(x => x.filter(y => y.id !== t.id)); if (t.type === 'sv') setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: Math.max(0, g.saved - t.amount) } : g)) }
@@ -356,6 +474,7 @@ function Budgie({ onLock }) {
   }
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
+    <CatCtx.Provider value={catApi}>
     <div className="mx-auto flex h-full max-w-md flex-col">
       <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))]">
         <div>
@@ -371,19 +490,21 @@ function Budgie({ onLock }) {
         {tab === 'home' && <Home pockets={pockets} txs={txs} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={txs} onDelete={del} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
-        {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} />}
+        {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
         {tab === 'goals' && <Goals goals={goals} setGoals={setGoals} onFund={g => setSheet({ fund: g })} />}
       </main>
       <button onClick={() => setSheet('add')} aria-label="Add transaction" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5">
         {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold ' + (tab === k ? 'text-azure' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 ' + (tab === k ? 'bg-azure/15' : '')}><Icon k={k} /></span>{l}</button>)}
       </nav>
-      {sheet === 'add' && <AddSheet pockets={pockets} onSave={save} onClose={() => setSheet(null)} />}
+      {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
       {sheet === 'account' && <AccountSheet onSave={addAccount} onClose={() => setSheet(null)} />}
       {sheet === 'reveal' && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(null) }} /></Sheet>}
       {sheet === 'security' && <SecuritySheet onClose={() => setSheet(null)} onChange={() => setPinSet(hasPin())} />}
       {sheet?.fund && <FundSheet goal={sheet.fund} pockets={pockets} onSave={fund} onClose={() => setSheet(null)} />}
     </div>
+    </CatCtx.Provider>
   )
 }
 
