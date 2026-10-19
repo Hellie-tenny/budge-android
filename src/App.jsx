@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, createContext, useContext } from 'react'
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup } from './logic.js'
+import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
+import UpdatePrompt from './UpdatePrompt.jsx'
 
 // Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -36,10 +37,22 @@ const dayLabel = iso => {
   return d.toDateString() === n.toDateString() ? 'Today' : d.toDateString() === y.toDateString() ? 'Yesterday' : d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 }
 
-function useStore(key, init) {
+// Saved data. With `onRemove` the store also tracks its records: changed ones get an `updatedAt`
+// stamp, and the ids of records that disappear are reported (for the deletion log).
+function useStore(key, init, onRemove) {
   const [v, setV] = useState(() => vaultGet(key, init))
-  useEffect(() => { vaultPut(key, v) }, [key, v])
-  return [v, setV]
+  const tracked = !!onRemove, last = useRef(v), cb = useRef(onRemove)
+  cb.current = onRemove
+  const set = useCallback(fn => setV(prev => {
+    const next = typeof fn === 'function' ? fn(prev) : fn
+    return tracked && Array.isArray(prev) && Array.isArray(next) ? stampChanges(prev, next, new Date().toISOString()) : next
+  }), [tracked])
+  useEffect(() => {
+    vaultPut(key, v)
+    if (cb.current && Array.isArray(v) && Array.isArray(last.current)) { const gone = removedIds(last.current, v); if (gone.length) cb.current(gone) }
+    last.current = v
+  }, [key, v])
+  return [v, set]
 }
 
 const Card = ({ children, className = '' }) => <div className={'rounded-3xl border border-black/5 bg-surface p-4 dark:border-white/5 ' + className}>{children}</div>
@@ -236,7 +249,7 @@ function Budgets({ budgets, setBudgets, txs, onManage }) {
 
 function Goals({ goals, setGoals, onFund }) {
   const [name, setName] = useState(''), [target, setTarget] = useState('')
-  const add = () => { if (!name || !Number(target)) return; setGoals([...goals, { id: uid(), name, target: Number(target), saved: 0 }]); setName(''); setTarget('') }
+  const add = () => { if (!name || !Number(target)) return; setGoals([...goals, { id: uid(), name, target: Number(target), base: 0 }]); setName(''); setTarget('') }
   return (
     <div className="space-y-3">
       <Card className="flex gap-2">
@@ -683,15 +696,25 @@ function Budgie({ onLock }) {
     document.addEventListener('visibilitychange', check)
     return () => { evs.forEach(e => window.removeEventListener(e, touch, true)); clearInterval(t); document.removeEventListener('visibilitychange', check) }
   }, [revealed])
-  const [pockets, setPockets] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, balance: 0 })))
-  const [txs, setTxs] = useStore('budgie.txs', [])
+  const [tombs, setTombs] = useStore('budgie.tombs', []) // log of deleted records, kept for syncing
+  const gone = c => ids => setTombs(t => [...t, ...ids.map(id => ({ c, id, at: new Date().toISOString() }))].slice(-5000))
+  const [rawPockets, setPockets] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, opening: 0 })), gone('pockets'))
+  const [txs, setTxs] = useStore('budgie.txs', [], gone('txs'))
   const [budgets, setBudgets] = useStore('budgie.budgets', {})
-  const [goals, setGoals] = useStore('budgie.goals', [])
-  const [cats, setCats] = useStore('budgie.cats', DEFAULT_CATS)
-  const [shop, setShop] = useStore('budgie.shop', [])
-  const [recurring, setRecurring] = useStore('budgie.recurring', [])
+  const [rawGoals, setGoals] = useStore('budgie.goals', [], gone('goals'))
+  const [cats, setCats] = useStore('budgie.cats', DEFAULT_CATS, gone('cats'))
+  const [shop, setShop] = useStore('budgie.shop', [], gone('shop'))
+  const [recurring, setRecurring] = useStore('budgie.recurring', [], gone('recurring'))
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
   const [notice, setNotice] = useState('')
+  // Balances and saved amounts are worked out from the transactions, never stored.
+  const pockets = withBalances(rawPockets, txs), goals = withSaved(rawGoals, txs)
+  const setGoalsStored = v => setGoals(prev => (typeof v === 'function' ? v(withSaved(prev, txs)) : v).map(({ saved, ...g }) => ({ ...g, base: g.base ?? 0 })))
+  useEffect(() => { // data saved by older versions is converted once; the numbers on screen do not change
+    if (legacyPockets(rawPockets)) setPockets(migratePockets(rawPockets, txs))
+    if (legacyGoals(rawGoals)) setGoals(migrateGoals(rawGoals, txs))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawPockets, rawGoals])
   const recRef = useRef(recurring)
   recRef.current = recurring
   const runRef = useRef(null)
@@ -708,10 +731,9 @@ function Budgie({ onLock }) {
     setCats(cs => used ? cs.map(c => c.id === id ? { ...c, archived: true } : c) : cs.filter(c => c.id !== id))
     setBudgets(b => { const n = { ...b }; delete n[id]; return n })
   }
-  const apply = (t, s) => setPockets(ps => ps.map(p => { let d = 0; if (p.name === t.pocket) d += t.type === 'in' ? t.amount : -t.amount; if (t.type === 'tr' && p.name === t.to) d += t.amount; return d ? { ...p, balance: p.balance + s * d } : p }))
-  const save = t => { apply(t, 1); setTxs(x => [t, ...x]); setSheet(null) }
-  const del = t => { apply(t, -1); setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)); if (t.type === 'sv') setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: Math.max(0, g.saved - t.amount) } : g)) }
-  const update = (o, t) => { apply(o, -1); apply(t, 1); setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
+  const save = t => { setTxs(x => [t, ...x]); setSheet(null) }
+  const del = t => { setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)) }
+  const update = (o, t) => { setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
   const needPin = next => setSheet(mask.on ? { pin: next } : next) // sheets that show real amounts ask for the PIN first while amounts are hidden
   const buy = t => { save(t); setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, txId: t.id } : i)) }
   const unbuy = i => {
@@ -719,9 +741,9 @@ function Budgie({ onLock }) {
     if (!confirm(t ? `Undo this purchase? The ${mk(t.amount)} expense will be removed and the money returned to ${t.pocket}.` : 'Mark this item as not bought?')) return
     if (t) del(t); else setShop(items => items.map(x => x.id === i.id ? { ...x, done: false, txId: undefined } : x))
   }
-  const fund = t => { save(t); setGoals(gs => gs.map(g => g.id === t.goalId ? { ...g, saved: g.saved + t.amount } : g)) }
+  const fund = t => save(t)
   const addAccount = (name, bal) => {
-    setPockets(ps => [...ps, { id: uid(), name, balance: 0 }])
+    setPockets(ps => [...ps, { id: uid(), name, opening: 0 }])
     if (bal) save({ id: uid(), type: 'in', amount: bal, pocket: name, category: 'Other', note: 'Opening balance', date: new Date().toISOString() })
     setSheet(null)
   }
@@ -731,13 +753,12 @@ function Budgie({ onLock }) {
     const next = recRef.current.map(r => {
       const ds = dueDates(r, today)
       if (!ds.length) return r
-      ds.forEach(d => posts.push({ id: uid(), type: r.type, amount: r.amount, pocket: r.pocket, category: r.category, note: r.note, recurId: r.id, date: toISO(d) }))
+      ds.forEach(d => posts.push({ id: recurringTxId(r, d), type: r.type, amount: r.amount, pocket: r.pocket, category: r.category, note: r.note, recurId: r.id, date: toISO(d) }))
       names.push(r.note || catApi.get(r.category).name)
       return { ...r, last: ds[ds.length - 1] }
     })
     if (!posts.length) return
     recRef.current = next; setRecurring(next)
-    posts.forEach(t => apply(t, 1))
     setTxs(x => [...posts, ...x])
     setNotice(`Added ${posts.length} recurring transaction${posts.length > 1 ? 's' : ''}: ${[...new Set(names)].join(', ')}`)
   }
@@ -754,11 +775,12 @@ function Budgie({ onLock }) {
   }
   const deleteRule = id => { recRef.current = recRef.current.filter(x => x.id !== id); setRecurring(recRef.current) }
   const restore = d => {
-    setPockets(d.pockets); setTxs(d.txs); setBudgets(d.budgets || {}); setGoals(d.goals || []); setCats(d.cats?.length ? d.cats : DEFAULT_CATS); setShop(d.shop || [])
+    const m = migrateData(d) // backups from older versions are converted before anything else changes
+    setPockets(m.pockets); setTxs(m.txs); setBudgets(m.budgets || {}); setGoals(m.goals); setCats(m.cats?.length ? m.cats : DEFAULT_CATS); setShop(m.shop || []); setTombs(m.tombs || [])
     recRef.current = d.recurring || []; setRecurring(recRef.current)
     setSheet(null); setNotice('Backup restored.'); runRec()
   }
-  const backupData = { pockets, txs, budgets, goals, cats, shop, recurring }
+  const backupData = { pockets: rawPockets, txs, budgets, goals: rawGoals, cats, shop, recurring, tombs }
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <CatCtx.Provider value={catApi}>
@@ -780,7 +802,7 @@ function Budgie({ onLock }) {
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
         {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
-        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoals} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} />}
+        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} />}
       </main>
       <button onClick={() => setSheet('add')} aria-label="Add transaction" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5">
@@ -805,6 +827,10 @@ function Budgie({ onLock }) {
 
 export default function App() {
   const [locked, setLocked] = useState(hasPin)
-  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />
-  return <Budgie onLock={() => { lock(); setLocked(true) }} />
+  return (
+    <>
+      {!window.Capacitor?.isNativePlatform?.() && <UpdatePrompt />}
+      {locked ? <LockScreen onUnlock={() => setLocked(false)} /> : <Budgie onLock={() => { lock(); setLocked(true) }} />}
+    </>
+  )
 }

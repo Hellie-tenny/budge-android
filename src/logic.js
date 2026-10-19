@@ -50,14 +50,64 @@ export function dueDates(r, upTo) {
 const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]) }
 export const describeRule = r => r.freq === 'weekly' ? `every ${WEEKDAYS[r.day]}` : `monthly on the ${ordinal(r.day)}`
 
-export const wrapBackup = data => ({ app: 'budgie', version: 1, exported: new Date().toISOString(), data })
+export const wrapBackup = data => ({ app: 'budgie', version: 2, exported: new Date().toISOString(), data })
 
 // Returns '' if the data looks like a usable backup, otherwise a message for the user.
 export function checkBackup(d) {
   if (!d || typeof d !== 'object') return "That doesn't look like a Budgie backup."
-  if (!Array.isArray(d.pockets) || !d.pockets.length || d.pockets.some(p => !p || typeof p.name !== 'string' || typeof p.balance !== 'number')) return 'The accounts in this file look wrong.'
+  if (!Array.isArray(d.pockets) || !d.pockets.length || d.pockets.some(p => !p || typeof p.name !== 'string' || typeof (p.opening ?? p.balance) !== 'number')) return 'The accounts in this file look wrong.'
   if (!Array.isArray(d.txs) || d.txs.some(t => !t || typeof t.amount !== 'number' || typeof t.date !== 'string' || typeof t.pocket !== 'string')) return 'The transactions in this file look wrong.'
   if (d.budgets != null && (typeof d.budgets !== 'object' || Array.isArray(d.budgets))) return 'The budgets in this file look wrong.'
-  for (const k of ['goals', 'cats', 'shop', 'recurring']) if (d[k] != null && !Array.isArray(d[k])) return `The ${k} in this file look wrong.`
+  for (const k of ['goals', 'cats', 'shop', 'recurring', 'tombs']) if (d[k] != null && !Array.isArray(d[k])) return `The ${k} in this file look wrong.`
   return ''
 }
+
+// ---- Balances and goal savings are worked out from the transactions -------------------------
+// Accounts are stored as { id, name, opening } and goals as { id, name, target, base }. The balance
+// and the saved amount are never stored, so two devices can never disagree about them.
+
+const r2 = n => Math.round(n * 100) / 100
+
+// How one transaction changes one account (accounts are matched by name, as transactions do)
+export const effect = (t, name) => {
+  let d = 0
+  if (t.pocket === name) d += t.type === 'in' ? t.amount : -t.amount
+  if (t.type === 'tr' && t.to === name) d += t.amount
+  return d
+}
+export const net = (txs, name) => r2(txs.reduce((a, t) => a + effect(t, name), 0))
+const saving = (txs, goalId) => r2(txs.reduce((a, t) => a + (t.type === 'sv' && t.goalId === goalId ? t.amount : 0), 0))
+
+// Older data stored a running `balance` / `saved`. Those are read as opening = balance - (what the
+// transactions add up to), so every number on screen stays exactly what it was.
+export const withBalances = (pockets, txs) => pockets.map(p => {
+  const n = net(txs, p.name), opening = p.opening ?? r2((p.balance ?? 0) - n)
+  return { ...p, opening, balance: r2(opening + n) }
+})
+export const withSaved = (goals, txs) => goals.map(g => {
+  const s = saving(txs, g.id), base = g.base ?? r2((g.saved ?? 0) - s)
+  return { ...g, base, saved: Math.max(0, r2(base + s)) }
+})
+
+// The stored shapes (no balance / saved fields)
+export const migratePockets = (pockets, txs) => withBalances(pockets, txs).map(({ balance, ...p }) => p)
+export const migrateGoals = (goals, txs) => withSaved(goals, txs).map(({ saved, ...g }) => g)
+export const migrateData = d => ({ ...d, pockets: migratePockets(d.pockets || [], d.txs || []), goals: migrateGoals(d.goals || [], d.txs || []) })
+export const legacyPockets = ps => ps.some(p => p.opening === undefined || 'balance' in p)
+export const legacyGoals = gs => gs.some(g => g.base === undefined || 'saved' in g)
+
+// ---- Housekeeping for syncing ---------------------------------------------------------------
+// Every record carries `updatedAt`, and removed records are noted in a log of tombstones
+// ({ c: collection, id, at }). A merge can then tell "deleted here" from "not synced yet".
+
+const same = (a, b) => { const { updatedAt: x, ...p } = a, { updatedAt: y, ...q } = b; return JSON.stringify(p) === JSON.stringify(q) }
+
+// Stamps records that are new or changed since `prev`; untouched records keep their old stamp.
+export function stampChanges(prev, next, now) {
+  const before = new Map(prev.map(r => [r.id, r]))
+  return next.map(r => { const o = before.get(r.id); return o && same(o, r) ? (o.updatedAt ? { ...r, updatedAt: o.updatedAt } : r) : { ...r, updatedAt: now } })
+}
+export const removedIds = (prev, next) => { const keep = new Set(next.map(r => r.id)); return prev.filter(r => !keep.has(r.id)).map(r => r.id) }
+
+// A recurring entry always gets the same id for the same day, so two devices posting it produce one record.
+export const recurringTxId = (rule, day) => `rec_${rule.id}_${day}`
