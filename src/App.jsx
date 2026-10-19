@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext } f
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
+import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 
 // Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -455,24 +456,29 @@ function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, o
 }
 
 // A shopping list is a plan: nothing changes in your balances until you tick an item as bought.
+// Items paid with "other money" (not yours, or not part of what this app tracks) never touch balances,
+// budgets or Activity. They only keep their own planned and spent totals on the list.
 function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
   const { active, get } = useCats()
-  const [name, setName] = useState(''), [est, setEst] = useState(''), [cat, setCat] = useState('')
+  const [name, setName] = useState(''), [est, setEst] = useState(''), [cat, setCat] = useState(''), [other, setOther] = useState(false)
   const cats = active('out'), catId = cats.some(c => c.id === cat) ? cat : (cats.find(c => c.id === 'Shopping') || cats[0])?.id || 'Other'
-  const add = () => { if (!name.trim()) return; setShop([...shop, { id: uid(), name: name.trim(), est: Number(est) || 0, category: catId, done: false }]); setName(''); setEst('') }
-  const todo = shop.filter(i => !i.done), bought = shop.filter(i => i.done)
+  const add = () => { if (!name.trim()) return; setShop([...shop, { id: uid(), name: name.trim(), est: Number(est) || 0, category: other ? 'Other' : catId, done: false, ...(other ? { other: true } : {}) }]); setName(''); setEst('') }
+  const mine = shop.filter(i => !i.other), theirs = shop.filter(i => i.other)
+  const todo = mine.filter(i => !i.done), bought = mine.filter(i => i.done)
   const planned = todo.reduce((a, i) => a + i.est, 0), total = pockets.reduce((a, p) => a + p.balance, 0)
   const spentIn = id => txs.filter(t => t.type === 'out' && t.category === id && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
   const need = {}
   todo.forEach(i => { need[i.category] = (need[i.category] || 0) + i.est })
   const warn = Object.entries(need).filter(([id, n]) => budgets[id] > 0 && n > budgets[id] - spentIn(id)).map(([id, n]) => `${get(id).name}: this list needs ${mk(n)}, but only ${mk(Math.max(0, budgets[id] - spentIn(id)))} is left in that budget.`)
-  const paid = i => txs.find(t => t.id === i.txId)?.amount ?? i.est
+  const paid = i => (i.other ? i.paid ?? i.est : txs.find(t => t.id === i.txId)?.amount ?? i.est)
+  const otherPlanned = theirs.filter(i => !i.done).reduce((a, i) => a + i.est, 0), otherSpent = theirs.filter(i => i.done).reduce((a, i) => a + paid(i), 0)
+  const clearBought = isOther => setShop(shop.filter(i => !(i.done && !!i.other === isOther)))
   const row = i => (
     <div key={i.id} className="flex items-center gap-3 py-2.5">
       <button aria-label={i.done ? 'Undo purchase' : 'Mark as bought'} onClick={() => (i.done ? onUnbuy(i) : onBuy(i))} className={'grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 text-sm ' + (i.done ? 'border-up bg-up text-white' : 'border-azure')}>{i.done && '✓'}</button>
       <div className="min-w-0 flex-1">
         <p className={'truncate font-medium ' + (i.done ? 'text-slate-400 line-through' : '')}>{i.name}</p>
-        <p className="truncate text-xs text-slate-500">{get(i.category).name}</p>
+        {!i.other && <p className="truncate text-xs text-slate-500">{get(i.category).name}</p>}
       </div>
       <p className="text-sm font-semibold">{i.done ? mk(paid(i)) : i.est ? mk(i.est) : ''}</p>
       <button aria-label="Remove item" onClick={() => setShop(shop.filter(x => x.id !== i.id))} className="px-1 text-slate-400">✕</button>
@@ -486,7 +492,12 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
           <input value={est} type="number" inputMode="numeric" onChange={e => setEst(e.target.value)} placeholder="Price" className={field + ' w-24! py-2!'} />
           <button onClick={add} className="rounded-2xl bg-azure px-4 font-semibold text-white">Add</button>
         </div>
-        <select aria-label="Category" value={catId} onChange={e => setCat(e.target.value)} className={field + ' py-2! text-base text-ink'}>{cats.map(c => <option key={c.id} value={c.id}>{c.emoji || EMO[c.id] || ''} {c.name}</option>)}</select>
+        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-paper p-1">
+          {[[false, 'Tracked money'], [true, 'Other money']].map(([v, l]) => <button key={l} onClick={() => setOther(v)} className={'rounded-xl py-2 text-sm font-semibold ' + (other === v ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+        </div>
+        {other
+          ? <p className="text-xs text-slate-500">Not counted in your balances, budgets or activity.</p>
+          : <select aria-label="Category" value={catId} onChange={e => setCat(e.target.value)} className={field + ' py-2! text-base text-ink'}>{cats.map(c => <option key={c.id} value={c.id}>{c.emoji || EMO[c.id] || ''} {c.name}</option>)}</select>}
       </Card>
       {planned > 0 && <Card>
         <p className="text-sm text-slate-500">Planned</p>
@@ -497,8 +508,19 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
       {shop.length === 0 && <p className="mt-6 text-center text-slate-500">Plan what you're going to buy. Tick items as you buy them and the money comes off your balance.</p>}
       {todo.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{todo.map(row)}</Card>}
       {bought.length > 0 && <>
-        <div className="flex items-center justify-between px-1"><p className="text-sm font-semibold text-slate-500">Bought</p><button onClick={() => setShop(shop.filter(i => !i.done))} className="text-sm font-semibold text-azure">Clear bought</button></div>
+        <div className="flex items-center justify-between px-1"><p className="text-sm font-semibold text-slate-500">Bought</p><button onClick={() => clearBought(false)} className="text-sm font-semibold text-azure">Clear bought</button></div>
         <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{bought.map(row)}</Card>
+      </>}
+      {theirs.length > 0 && <>
+        <div className="flex items-center justify-between px-1">
+          <p className="text-sm font-semibold text-slate-500">Other money · not tracked</p>
+          {theirs.some(i => i.done) && <button onClick={() => clearBought(true)} className="text-sm font-semibold text-azure">Clear bought</button>}
+        </div>
+        <Card>
+          <div className="flex justify-between text-sm"><span className="text-slate-500">Planned</span><span className="font-semibold">{mk(otherPlanned)}</span></div>
+          <div className="flex justify-between text-sm"><span className="text-slate-500">Spent so far</span><span className="font-semibold">{mk(otherSpent)}</span></div>
+        </Card>
+        <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{[...theirs.filter(i => !i.done), ...theirs.filter(i => i.done)].map(row)}</Card>
       </>}
     </div>
   )
@@ -510,10 +532,10 @@ function BuySheet({ item, pockets, onSave, onClose }) {
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">Bought {item.name}?</h3>
-      <p className="text-center text-sm text-slate-500">{get(item.category).name} · comes off your balance</p>
+      <p className="text-center text-sm text-slate-500">{item.other ? 'Other money · not tracked' : `${get(item.category).name} · comes off your balance`}</p>
       <Amount value={amount} onChange={setAmount} />
-      <Pick label="Paid from" value={pocket} onChange={setPocket} pockets={pockets} />
-      <Save off={!(Number(amount) > 0)} onClick={() => onSave({ id: uid(), type: 'out', amount: Number(amount), pocket, category: item.category, note: item.name, shopId: item.id, date: new Date().toISOString() })}>Save purchase</Save>
+      {!item.other && <Pick label="Paid from" value={pocket} onChange={setPocket} pockets={pockets} />}
+      <Save off={!(Number(amount) > 0)} onClick={() => onSave(item.other ? { other: true, shopId: item.id, amount: Number(amount) } : { id: uid(), type: 'out', amount: Number(amount), pocket, category: item.category, note: item.name, shopId: item.id, date: new Date().toISOString() })}>{item.other ? 'Mark as bought' : 'Save purchase'}</Save>
     </Sheet>
   )
 }
@@ -549,7 +571,12 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
     try {
       let text = JSON.stringify(wrapBackup(data))
       if (pw) text = JSON.stringify(await sealBackup(text, pw))
-      download(`budgie-backup-${ymd(new Date())}${pw ? '.budgie' : '.json'}`, text)
+      const name = `budgie-backup-${ymd(new Date())}${pw ? '.budgie' : '.json'}`
+      if (isNative()) { // the Android app saves through the share sheet; a download link does not work in its web view
+        const r = await shareFile(name, text)
+        if (r === 'unavailable') { setErr('Backups need the Filesystem and Share plugins in the Android app.'); setBusy(false); return }
+        if (r === 'cancelled') { setErr('The backup was not saved.'); setBusy(false); return }
+      } else download(name, text)
       onBackedUp(new Date().toISOString()); setMode('done')
     } catch { setErr('Could not create the backup.') }
     setBusy(false)
@@ -580,7 +607,7 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
         {back}
       </>}
       {mode === 'done' && <>
-        <p className="text-center text-sm text-slate-500">Backup saved to your downloads. Keep it somewhere safe.</p>
+        <p className="text-center text-sm text-slate-500">{isNative() ? 'Backup ready. Keep it somewhere safe, like Drive or your email.' : 'Backup saved to your downloads. Keep it somewhere safe.'}</p>
         <Save onClick={onClose}>Done</Save>
       </>}
       {mode === 'import' && <>
@@ -678,12 +705,14 @@ function Budgie({ onLock }) {
   mask.on = pinSet && !revealed
   useEffect(() => {
     let away = 0
-    const f = () => {
-      if (document.hidden) away = Date.now()
-      else if (pinSet && away && Date.now() - away > LOCK_AFTER_MS) onLock()
+    const change = hidden => {
+      if (hidden) away = away || Date.now()
+      else { if (pinSet && away && Date.now() - away > LOCK_AFTER_MS) onLock(); away = 0 }
     }
+    const f = () => change(document.hidden)
     document.addEventListener('visibilitychange', f)
-    return () => document.removeEventListener('visibilitychange', f)
+    const off = onAppState(active => change(!active)) // Android reports leaving the app more reliably than the page does
+    return () => { document.removeEventListener('visibilitychange', f); off() }
   }, [pinSet])
   useEffect(() => {
     if (!revealed) return
@@ -735,11 +764,14 @@ function Budgie({ onLock }) {
   const del = t => { setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)) }
   const update = (o, t) => { setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
   const needPin = next => setSheet(mask.on ? { pin: next } : next) // sheets that show real amounts ask for the PIN first while amounts are hidden
-  const buy = t => { save(t); setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, txId: t.id } : i)) }
+  const buy = t => {
+    if (t.other) { setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, paid: t.amount } : i)); setSheet(null); return } // other money: nothing is recorded in the accounts
+    save(t); setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, txId: t.id } : i))
+  }
   const unbuy = i => {
-    const t = txs.find(x => x.id === i.txId)
+    const t = i.other ? null : txs.find(x => x.id === i.txId)
     if (!confirm(t ? `Undo this purchase? The ${mk(t.amount)} expense will be removed and the money returned to ${t.pocket}.` : 'Mark this item as not bought?')) return
-    if (t) del(t); else setShop(items => items.map(x => x.id === i.id ? { ...x, done: false, txId: undefined } : x))
+    if (t) del(t); else setShop(items => items.map(x => x.id === i.id ? { ...x, done: false, txId: undefined, paid: undefined } : x))
   }
   const fund = t => save(t)
   const addAccount = (name, bal) => {
@@ -769,6 +801,10 @@ function Budgie({ onLock }) {
     document.addEventListener('visibilitychange', f)
     return () => document.removeEventListener('visibilitychange', f)
   }, [])
+  // Back closes an open sheet, then returns to Home, then leaves the app.
+  const backRef = useRef(null)
+  backRef.current = () => { if (sheet) setSheet(null); else if (tab !== 'home') setTab('home'); else exitApp() }
+  useEffect(() => onBackButton(() => backRef.current()), [])
   const saveRule = r => {
     recRef.current = recRef.current.some(x => x.id === r.id) ? recRef.current.map(x => x.id === r.id ? r : x) : [...recRef.current, r]
     setRecurring(recRef.current); runRec()
