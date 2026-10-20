@@ -7,8 +7,11 @@ export const isNative = () => !!window.Capacitor?.isNativePlatform?.()
 
 const cache = {}
 const plugin = name => {
-  if (!isNative() || !window.Capacitor.isPluginAvailable?.(name)) return null
-  return (cache[name] ||= window.Capacitor.registerPlugin(name))
+  const C = window.Capacitor
+  if (!isNative() || !C.isPluginAvailable?.(name)) return null
+  try {
+    return (cache[name] ||= (typeof C.registerPlugin === 'function' ? C.registerPlugin(name) : C.Plugins?.[name]) ?? null)
+  } catch { return null }
 }
 
 // Saves a file through the Android share sheet (Drive, WhatsApp, email, "save to device"...).
