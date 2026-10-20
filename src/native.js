@@ -29,8 +29,12 @@ function listen(event, fn) {
   const app = plugin('App')
   if (!app) return () => {}
   let handle = null, stopped = false
-  app.addListener(event, fn).then(h => { handle = h; if (stopped) h.remove() })
-  return () => { stopped = true; handle?.remove() }
+  try {
+    Promise.resolve(app.addListener(event, fn))
+      .then(h => { handle = h; if (stopped) h?.remove?.() })
+      .catch(() => {})
+  } catch { return () => {} }
+  return () => { stopped = true; handle?.remove?.() }
 }
 
 // The Android back button. While a listener is registered the app must handle "back" itself.
