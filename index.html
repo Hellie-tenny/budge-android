@@ -12,6 +12,16 @@
 
 <body>
   <div id="root"></div>
+  <script>
+  function showErr(m) {
+    var d = document.createElement('pre');
+    d.style.cssText = 'position:fixed;inset:0;z-index:99999;margin:0;padding:16px;overflow:auto;background:#fff;color:#c00;font:12px monospace;white-space:pre-wrap';
+    d.textContent = m;
+    document.body.appendChild(d);
+  }
+  window.addEventListener('error', function (e) { showErr('ERROR: ' + e.message + '\n' + (e.filename || '') + ':' + (e.lineno || '')); });
+  window.addEventListener('unhandledrejection', function (e) { showErr('PROMISE: ' + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+</script>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 
