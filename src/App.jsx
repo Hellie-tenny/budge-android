@@ -461,9 +461,17 @@ function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, o
 function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
   const { active, get } = useCats()
   const [name, setName] = useState(''), [est, setEst] = useState(''), [cat, setCat] = useState(''), [other, setOther] = useState(false)
+  // "Money to spend" for other-money shopping is kept as one extra record in the list (never removed, only set to 0).
+  const funds = shop.find(i => i.fund), items = shop.filter(i => !i.fund), fundsAmt = funds?.amount || 0
+  const [fundsText, setFundsText] = useState(fundsAmt ? String(fundsAmt) : '')
+  const setFunds = v => {
+    setFundsText(v)
+    const amount = Math.max(0, Number(v) || 0)
+    setShop(list => list.some(i => i.fund) ? list.map(i => (i.fund ? { ...i, amount } : i)) : [...list, { id: 'other-funds', fund: true, amount }])
+  }
   const cats = active('out'), catId = cats.some(c => c.id === cat) ? cat : (cats.find(c => c.id === 'Shopping') || cats[0])?.id || 'Other'
   const add = () => { if (!name.trim()) return; setShop([...shop, { id: uid(), name: name.trim(), est: Number(est) || 0, category: other ? 'Other' : catId, done: false, ...(other ? { other: true } : {}) }]); setName(''); setEst('') }
-  const mine = shop.filter(i => !i.other), theirs = shop.filter(i => i.other)
+  const mine = items.filter(i => !i.other), theirs = items.filter(i => i.other)
   const todo = mine.filter(i => !i.done), bought = mine.filter(i => i.done)
   const planned = todo.reduce((a, i) => a + i.est, 0), total = pockets.reduce((a, p) => a + p.balance, 0)
   const spentIn = id => txs.filter(t => t.type === 'out' && t.category === id && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
@@ -472,6 +480,7 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
   const warn = Object.entries(need).filter(([id, n]) => budgets[id] > 0 && n > budgets[id] - spentIn(id)).map(([id, n]) => `${get(id).name}: this list needs ${mk(n)}, but only ${mk(Math.max(0, budgets[id] - spentIn(id)))} is left in that budget.`)
   const paid = i => (i.other ? i.paid ?? i.est : txs.find(t => t.id === i.txId)?.amount ?? i.est)
   const otherPlanned = theirs.filter(i => !i.done).reduce((a, i) => a + i.est, 0), otherSpent = theirs.filter(i => i.done).reduce((a, i) => a + paid(i), 0)
+  const left = fundsAmt - otherSpent, afterPlanned = left - otherPlanned
   const clearBought = isOther => setShop(shop.filter(i => !(i.done && !!i.other === isOther)))
   const row = i => (
     <div key={i.id} className="flex items-center gap-3 py-2.5">
@@ -496,7 +505,11 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
           {[[false, 'Tracked money'], [true, 'Other money']].map(([v, l]) => <button key={l} onClick={() => setOther(v)} className={'rounded-xl py-2 text-sm font-semibold ' + (other === v ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
         </div>
         {other
-          ? <p className="text-xs text-slate-500">Not counted in your balances, budgets or activity.</p>
+          ? <>
+            <p className="text-xs text-slate-500">Not counted in your balances, budgets or activity.</p>
+            <input value={fundsText} type="number" inputMode="decimal" onChange={e => setFunds(e.target.value)} placeholder="Money to spend (optional)" aria-label="Money to spend" className={field + ' py-2!'} />
+            <p className="text-xs text-slate-500">Money you were given, or your own money that this app doesn't track.</p>
+          </>
           : <select aria-label="Category" value={catId} onChange={e => setCat(e.target.value)} className={field + ' py-2! text-base text-ink'}>{cats.map(c => <option key={c.id} value={c.id}>{c.emoji || EMO[c.id] || ''} {c.name}</option>)}</select>}
       </Card>
       {planned > 0 && <Card>
@@ -505,22 +518,27 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
         <p className={'mt-1 text-sm ' + (planned > total ? 'text-down' : 'text-slate-500')}>{planned > total ? `${mk(planned - total)} more than your total balance` : `${mk(total - planned)} left of your ${mk(total)} after this list`}</p>
         {warn.map(w => <p key={w} className="mt-1 text-sm text-down">{w}</p>)}
       </Card>}
-      {shop.length === 0 && <p className="mt-6 text-center text-slate-500">Plan what you're going to buy. Tick items as you buy them and the money comes off your balance.</p>}
+      {items.length === 0 && <p className="mt-6 text-center text-slate-500">Plan what you're going to buy. Tick items as you buy them and the money comes off your balance.</p>}
       {todo.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{todo.map(row)}</Card>}
       {bought.length > 0 && <>
         <div className="flex items-center justify-between px-1"><p className="text-sm font-semibold text-slate-500">Bought</p><button onClick={() => clearBought(false)} className="text-sm font-semibold text-azure">Clear bought</button></div>
         <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{bought.map(row)}</Card>
       </>}
-      {theirs.length > 0 && <>
+      {(theirs.length > 0 || fundsAmt > 0) && <>
         <div className="flex items-center justify-between px-1">
           <p className="text-sm font-semibold text-slate-500">Other money · not tracked</p>
           {theirs.some(i => i.done) && <button onClick={() => clearBought(true)} className="text-sm font-semibold text-azure">Clear bought</button>}
         </div>
         <Card>
+          {fundsAmt > 0 && <div className="flex justify-between text-sm"><span className="text-slate-500">Money to spend</span><span className="font-semibold">{mk(fundsAmt)}</span></div>}
           <div className="flex justify-between text-sm"><span className="text-slate-500">Planned</span><span className="font-semibold">{mk(otherPlanned)}</span></div>
           <div className="flex justify-between text-sm"><span className="text-slate-500">Spent so far</span><span className="font-semibold">{mk(otherSpent)}</span></div>
+          {fundsAmt > 0 && <>
+            <div className="flex justify-between text-sm"><span className="text-slate-500">{left < 0 ? 'Over by' : 'Left'}</span><span className={'font-semibold ' + (left < 0 ? 'text-down' : '')}>{mk(Math.abs(left))}</span></div>
+            {otherPlanned > 0 && <p className={'mt-1 text-sm ' + (afterPlanned < 0 ? 'text-down' : 'text-slate-500')}>{afterPlanned < 0 ? `${mk(-afterPlanned)} short for the items still planned` : `${mk(afterPlanned)} left after the items still planned`}</p>}
+          </>}
         </Card>
-        <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{[...theirs.filter(i => !i.done), ...theirs.filter(i => i.done)].map(row)}</Card>
+        {theirs.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{[...theirs.filter(i => !i.done), ...theirs.filter(i => i.done)].map(row)}</Card>}
       </>}
     </div>
   )
