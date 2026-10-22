@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext } f
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
+import { watchUser, signUp, signIn, signInGoogle, signOutUser, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 
 // Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
@@ -409,6 +410,53 @@ function AccountSheet({ onSave, onClose }) {
   )
 }
 
+function CloudSheet({ user, onClose }) {
+  const [mode, setMode] = useState('in'), [email, setEmail] = useState(''), [pw, setPw] = useState(''), [pw2, setPw2] = useState('')
+  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState('')
+  const go = async fn => { setBusy(true); setErr(''); setInfo(''); try { await fn() } catch (e) { setErr(authMessage(e)) } setBusy(false) }
+  const mail = email.trim()
+  const switchTo = m => { setMode(m); setErr(''); setInfo('') }
+  if (user) return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Account</h3>
+      <Card>
+        <p className="text-xs text-slate-500">Signed in as</p>
+        <p className="break-all font-semibold">{user.email}</p>
+        <p className="mt-2 text-sm text-slate-500">Syncing between your devices is not switched on yet. Your data is still only on this device.</p>
+      </Card>
+      <button onClick={() => confirm('Sign out of this device? Your data stays on this device.') && go(signOutUser)} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold text-down disabled:opacity-40">Sign out</button>
+    </Sheet>
+  )
+  const submit = () => go(async () => {
+    if (mode === 'reset') { await resetPassword(mail); setInfo('If an account exists for this email, a reset link is on its way.'); return }
+    if (mode === 'up') {
+      if (pw.length < 8) return setErr('Use at least 8 characters for your password.')
+      if (pw !== pw2) return setErr('The two passwords do not match.')
+      await signUp(mail, pw)
+    } else await signIn(mail, pw)
+    onClose()
+  })
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">{mode === 'up' ? 'Create an account' : mode === 'reset' ? 'Reset password' : 'Sign in'}</h3>
+      <p className="text-center text-sm text-slate-500">Optional. Budgie works fully without an account.</p>
+      {mode !== 'reset' && <>
+        <button onClick={() => go(async () => { await signInGoogle(); onClose() })} disabled={busy} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-paper py-3.5 font-semibold disabled:opacity-40"><span className="text-xl font-bold text-[#4285f4]">G</span>Continue with Google</button>
+        <p className="text-center text-xs text-slate-500">or use an email and password</p>
+      </>}
+      <input value={email} type="email" autoComplete="email" onChange={e => setEmail(e.target.value)} placeholder="Email" className={field} />
+      {mode !== 'reset' && <input value={pw} type="password" autoComplete={mode === 'up' ? 'new-password' : 'current-password'} onChange={e => setPw(e.target.value)} placeholder="Password" className={field} />}
+      {mode === 'up' && <input value={pw2} type="password" autoComplete="new-password" onChange={e => setPw2(e.target.value)} placeholder="Repeat password" className={field} />}
+      {err && <p className="text-sm text-down">{err}</p>}
+      {info && <p className="text-sm text-up">{info}</p>}
+      <Save off={busy || !mail || (mode !== 'reset' && !pw)} onClick={submit}>{busy ? 'Please wait…' : mode === 'up' ? 'Create account' : mode === 'reset' ? 'Send reset link' : 'Sign in'}</Save>
+      <div className="flex justify-between text-sm font-semibold text-azure">
+        {mode === 'in' ? <><button onClick={() => switchTo('up')}>Create an account</button><button onClick={() => switchTo('reset')}>Forgot password?</button></> : <button onClick={() => switchTo('in')}>Back to sign in</button>}
+      </div>
+    </Sheet>
+  )
+}
+
 function SecuritySheet({ onClose, onChange }) {
   const [mode, setMode] = useState(hasPin() ? 'menu' : 'new'), [first, setFirst] = useState(''), [code, setCode] = useState('')
   const done = () => { onChange(); onClose() }
@@ -564,8 +612,9 @@ function BuySheet({ item, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-function MoreSheet({ lastBackup, onPick, onClose }) {
+function MoreSheet({ lastBackup, user, onPick, onClose }) {
   const rows = [
+    ['cloud', '☁️', 'Account', user ? user.email : 'Sign in to use Budgie on more devices'],
     ['backup', '💾', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
     ['recurring', '🔁', 'Recurring transactions', 'Rent, salary, regular top-ups'],
     ['cats', '🏷️', 'Categories', 'Add, rename or hide'],
@@ -758,6 +807,8 @@ function Budgie({ onLock }) {
   const [recurring, setRecurring] = useStore('budgie.recurring', [], gone('recurring'))
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
   const [notice, setNotice] = useState('')
+  const [user, setUser] = useState(null)
+  useEffect(() => watchUser(setUser), [])
   // Balances and saved amounts are worked out from the transactions, never stored.
   const pockets = withBalances(rawPockets, txs), goals = withSaved(rawGoals, txs)
   const setGoalsStored = v => setGoals(prev => (typeof v === 'function' ? v(withSaved(prev, txs)) : v).map(({ saved, ...g }) => ({ ...g, base: g.base ?? 0 })))
@@ -875,7 +926,8 @@ function Budgie({ onLock }) {
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} onSave={buy} onClose={() => setSheet(null)} />}
-      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'cloud' && <CloudSheet user={user} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
       {sheet === 'recurring' && <RecurSheet rules={recurring} pockets={pockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
