@@ -16,7 +16,7 @@ const plugin = name => {
 
 // Saves a file through the Android share sheet (Drive, WhatsApp, email, "save to device"...).
 // Returns 'shared', 'cancelled', or 'unavailable' when the Filesystem / Share plugins are not installed.
-export async function shareFile(name, text, title = 'Budgie backup') {
+export async function shareFile(name, text, title = 'Sprout backup') {
   const fs = plugin('Filesystem'), share = plugin('Share')
   if (!fs || !share) return 'unavailable'
   const { uri } = await fs.writeFile({ path: name, data: text, directory: 'CACHE', encoding: 'utf8' })

@@ -5,10 +5,10 @@ export const LOCK_AFTER_MS = 30000    // lock after being away this long (0 = im
 export const REVEAL_MS = 120000       // amounts hide again after this much inactivity
 export const REVEAL_ON_UNLOCK = false // true = opening the app with the PIN also shows amounts
 
-// mk() in App.jsx reads this flag. Budgie sets it on every render.
+// mk() in App.jsx reads this flag. Sprout sets it on every render.
 export const mask = { on: false }
 
-// How it works: all budgie.* data is encrypted (AES-GCM) with a random data key.
+// How it works: all budgie.* data (the storage keys keep their old name so existing data still opens) is encrypted (AES-GCM) with a random data key.
 // That key is stored twice, wrapped by a key made from the PIN and by one made from a
 // recovery code. Either one can open it, so forgetting the PIN no longer means losing data.
 const META = 'budgie.vault', FAIL = 'budgie.pinFail', ITER = 300000
@@ -127,7 +127,7 @@ export async function disablePin() {
 export async function sealBackup(text, password) {
   const salt = rnd(16), iv = rnd(12)
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await kdf(password, salt), enc.encode(text))
-  return { app: 'budgie', enc: true, salt: b64(salt), iv: b64(iv), ct: b64(ct) }
+  return { app: 'sprout', enc: true, salt: b64(salt), iv: b64(iv), ct: b64(ct) }
 }
 export async function openBackup(env, password) {
   try { return dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(env.iv) }, await kdf(password, unb64(env.salt)), unb64(env.ct))) }
@@ -195,7 +195,7 @@ export function LockScreen({ onUnlock }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-paper px-6">
       <div className="w-full max-w-xs">
-        <p className="mb-8 text-center text-3xl font-bold text-navy">Budgie</p>
+        <p className="mb-8 text-center text-3xl font-bold text-navy">Sprout</p>
         {mode === 'pin' && <>
           <PinCheck open hint="to open the app" onOk={onUnlock} />
           <button onClick={() => setMode('rec')} className="mt-6 w-full text-sm font-semibold text-azure">Forgot PIN?</button>

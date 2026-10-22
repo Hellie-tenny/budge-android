@@ -20,7 +20,7 @@ export default function UpdatePrompt() {
   if (!needRefresh) return null
   return (
     <div role="status" className="fixed inset-x-3 top-[calc(0.75rem+env(safe-area-inset-top))] z-[60] mx-auto flex max-w-md items-center gap-3 rounded-2xl bg-navy p-3 text-sm text-surface shadow-lg">
-      <span className="flex-1">A new version of Budgie is ready.</span>
+      <span className="flex-1">A new version of Sprout is ready.</span>
       <button onClick={() => updateServiceWorker(true)} className="rounded-xl bg-azure px-3 py-1.5 font-semibold text-white">Update</button>
       <button onClick={() => setNeedRefresh(false)} aria-label="Later" className="px-1 opacity-70">✕</button>
     </div>

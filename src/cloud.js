@@ -1,5 +1,5 @@
 // Optional account sign-in (Firebase Authentication: Google, plus email and password as a fallback).
-// Budgie works without an account; this only identifies a person for the sync that comes later.
+// Sprout works without an account; this only identifies a person for the sync that comes later.
 // The web config below is not secret. Access is controlled by Firebase Authentication and the database rules.
 import { initializeApp } from 'firebase/app'
 import {

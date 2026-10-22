@@ -5,7 +5,7 @@ import UpdatePrompt from './UpdatePrompt.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 
-// Categories are saved data (budgie.cats). Transactions store the category id, so renaming never breaks history.
+// Categories are saved data (stored under the key budgie.cats; the budgie.* storage keys keep their old name on purpose). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
 const DEFAULT_CATS = [
   { id: 'Food', name: 'Food', color: '#e8590c', kind: 'out' },
@@ -439,7 +439,7 @@ function CloudSheet({ user, onClose }) {
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">{mode === 'up' ? 'Create an account' : mode === 'reset' ? 'Reset password' : 'Sign in'}</h3>
-      <p className="text-center text-sm text-slate-500">Optional. Budgie works fully without an account.</p>
+      <p className="text-center text-sm text-slate-500">Optional. Sprout works fully without an account.</p>
       {mode !== 'reset' && <>
         <button onClick={() => go(async () => { await signInGoogle(); onClose() })} disabled={busy} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-paper py-3.5 font-semibold disabled:opacity-40"><span className="text-xl font-bold text-[#4285f4]">G</span>Continue with Google</button>
         <p className="text-center text-xs text-slate-500">or use an email and password</p>
@@ -614,7 +614,7 @@ const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { 
 
 function MoreSheet({ lastBackup, user, onPick, onClose }) {
   const rows = [
-    ['cloud', '☁️', 'Account', user ? user.email : 'Sign in to use Budgie on more devices'],
+    ['cloud', '☁️', 'Account', user ? user.email : 'Sign in to use Sprout on more devices'],
     ['backup', '💾', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
     ['recurring', '🔁', 'Recurring transactions', 'Rent, salary, regular top-ups'],
     ['cats', '🏷️', 'Categories', 'Add, rename or hide'],
@@ -642,7 +642,7 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
     try {
       let text = JSON.stringify(wrapBackup(data))
       if (pw) text = JSON.stringify(await sealBackup(text, pw))
-      const name = `budgie-backup-${ymd(new Date())}${pw ? '.budgie' : '.json'}`
+      const name = `sprout-backup-${ymd(new Date())}${pw ? '.sprout' : '.json'}`
       if (isNative()) { // the Android app saves through the share sheet; a download link does not work in its web view
         const r = await shareFile(name, text)
         if (r === 'unavailable') { setErr('Backups need the Filesystem and Share plugins in the Android app.'); setBusy(false); return }
@@ -656,7 +656,7 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
   const choose = async f => {
     setErr(''); setFound(null); setEnv(null); setPw('')
     if (!f) return
-    try { const obj = JSON.parse(await readText(f)); if (obj?.app !== 'budgie') throw new Error('x'); obj.enc ? setEnv(obj) : load(obj) } catch { setErr("That doesn't look like a Budgie backup.") }
+    try { const obj = JSON.parse(await readText(f)); if (!['sprout', 'budgie'].includes(obj?.app)) throw new Error('x'); obj.enc ? setEnv(obj) : load(obj) } catch { setErr("That doesn't look like a Sprout backup.") }
   }
   const openFile = async () => { setBusy(true); setErr(''); try { load(JSON.parse(await openBackup(env, pw))) } catch { setErr('Wrong password.') } setBusy(false) }
   const back = <button onClick={() => { setMode('menu'); setErr(''); setPw(''); setEnv(null); setFound(null) }} className="w-full py-1 text-sm font-semibold text-azure">Back</button>
@@ -683,8 +683,8 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
       </>}
       {mode === 'import' && <>
         {!found && !env && <>
-          <p className="text-sm text-slate-500">Choose a Budgie backup file (.json or .budgie).</p>
-          <input type="file" accept=".json,.budgie,application/json" onChange={e => choose(e.target.files[0])} className="w-full text-sm" />
+          <p className="text-sm text-slate-500">Choose a Sprout backup file (.json or .sprout).</p>
+          <input type="file" accept=".json,.sprout,.budgie,application/json" onChange={e => choose(e.target.files[0])} className="w-full text-sm" />
         </>}
         {env && !found && <>
           <p className="text-sm text-slate-500">This backup is password protected.</p>
@@ -770,7 +770,7 @@ const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights
 const ICONS = { home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
-function Budgie({ onLock }) {
+function Sprout({ onLock }) {
   const [tab, setTab] = useState('home'), [sheet, setSheet] = useState(null)
   const [pinSet, setPinSet] = useState(hasPin), [revealed, setRevealed] = useState(REVEAL_ON_UNLOCK)
   mask.on = pinSet && !revealed
@@ -897,7 +897,7 @@ function Budgie({ onLock }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] lg:px-10 lg:pb-4 lg:pt-8">
         <div>
-          <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Budgie'}</p>
+          <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Sprout'}</p>
           <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? 'Your money' : TABS.find(t => t[0] === tab)[1]}</h1>
         </div>
         <div className="flex gap-2 text-slate-500">
@@ -919,7 +919,7 @@ function Budgie({ onLock }) {
       </div>
       <button onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5 lg:static lg:order-first lg:mx-0 lg:w-64 lg:max-w-none lg:shrink-0 lg:flex-col lg:justify-start lg:gap-1 lg:overflow-y-auto lg:border-r lg:border-t-0 lg:px-4 lg:py-8 lg:backdrop-blur-none">
-        <p className="hidden px-4 pb-6 text-2xl font-bold text-navy lg:block">Budgie</p>
+        <p className="hidden px-4 pb-6 text-2xl font-bold text-navy lg:block">Sprout</p>
         {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
         <button onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
       </nav>
@@ -946,7 +946,7 @@ export default function App() {
   return (
     <>
       {!window.Capacitor?.isNativePlatform?.() && <UpdatePrompt />}
-      {locked ? <LockScreen onUnlock={() => setLocked(false)} /> : <Budgie onLock={() => { lock(); setLocked(true) }} />}
+      {locked ? <LockScreen onUnlock={() => setLocked(false)} /> : <Sprout onLock={() => { lock(); setLocked(true) }} />}
     </>
   )
 }

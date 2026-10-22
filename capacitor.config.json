@@ -1,1 +1,11 @@
-{ "appId": "com.budgie.app", "appName": "Budgie", "webDir": "dist" }
+{
+  "appId": "com.budgie.app",
+  "appName": "Sprout",
+  "webDir": "dist",
+  "plugins": {
+    "FirebaseAuthentication": {
+      "skipNativeAuth": true,
+      "providers": ["google.com"]
+    }
+  }
+}

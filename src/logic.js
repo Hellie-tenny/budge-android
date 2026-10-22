@@ -50,11 +50,11 @@ export function dueDates(r, upTo) {
 const ordinal = n => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]) }
 export const describeRule = r => r.freq === 'weekly' ? `every ${WEEKDAYS[r.day]}` : `monthly on the ${ordinal(r.day)}`
 
-export const wrapBackup = data => ({ app: 'budgie', version: 2, exported: new Date().toISOString(), data })
+export const wrapBackup = data => ({ app: 'sprout', version: 2, exported: new Date().toISOString(), data })
 
 // Returns '' if the data looks like a usable backup, otherwise a message for the user.
 export function checkBackup(d) {
-  if (!d || typeof d !== 'object') return "That doesn't look like a Budgie backup."
+  if (!d || typeof d !== 'object') return "That doesn't look like a Sprout backup."
   if (!Array.isArray(d.pockets) || !d.pockets.length || d.pockets.some(p => !p || typeof p.name !== 'string' || typeof (p.opening ?? p.balance) !== 'number')) return 'The accounts in this file look wrong.'
   if (!Array.isArray(d.txs) || d.txs.some(t => !t || typeof t.amount !== 'number' || typeof t.date !== 'string' || typeof t.pocket !== 'string')) return 'The transactions in this file look wrong.'
   if (d.budgets != null && (typeof d.budgets !== 'object' || Array.isArray(d.budgets))) return 'The budgets in this file look wrong.'
