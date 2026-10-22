@@ -127,19 +127,19 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
   const used = Object.entries(budgets).filter(([, l]) => l > 0).reduce((a, [c]) => a + (byCat.find(d => d.id === c)?.value || 0), 0)
   const now = new Date(), left = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1
   return (
-    <div className="space-y-4">
-      <section className="pt-1">
+    <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
+      <section className="pt-1 lg:order-1 lg:col-span-2">
         <p className="text-sm text-slate-500">Total balance</p>
         <p className="text-5xl font-bold leading-tight tracking-tight">{mk(total)}</p>
         <p className="mt-1 text-sm text-slate-500"><span className="font-semibold text-up">+{mk(inc)}</span> in · <span className="font-semibold">-{mk(out)}</span> out this month</p>
         {limit > 0 && <p className="mt-3 inline-block rounded-full bg-azure/10 px-3 py-1.5 text-sm font-medium text-azure">{used >= limit ? 'Budget used up for this month' : `${mk((limit - used) / left)} a day to stay on budget`}</p>}
       </section>
-      <Card className="py-2">
+      <Card className="py-2 lg:order-3">
         {pockets.map((p, i) => <div key={p.id} className="flex items-center gap-3 py-3"><span className="h-3 w-3 rounded-full" style={{ background: PC[i % 5] }} /><span className="flex-1">{p.name}</span><span className="font-semibold">{mk(p.balance)}</span></div>)}
         <button onClick={onAccount} className="w-full border-t border-black/5 pt-3 text-left text-sm font-semibold text-azure dark:border-white/5">+ Add account</button>
       </Card>
-      {over.length > 0 && <div className="rounded-2xl bg-down/10 p-3 text-sm text-down">Over budget: {over.map(c => get(c).name).join(', ')}</div>}
-      <Card>
+      {over.length > 0 && <div className="rounded-2xl bg-down/10 p-3 text-sm text-down lg:order-2 lg:col-span-2">Over budget: {over.map(c => get(c).name).join(', ')}</div>}
+      <Card className="lg:order-4">
         <h3 className="mb-3 font-semibold">Where your money went</h3>
         {byCat.length === 0 ? <p className="text-sm text-slate-500">No spending yet this month. Tap + to add an expense.</p> : (
           <div className="flex items-center gap-4">
@@ -149,7 +149,7 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
         )}
         {lastOut > 0 && <p className="mt-3 text-sm text-slate-500">{out <= lastOut ? `${mk(lastOut - out)} less` : `${mk(out - lastOut)} more`} than last month.</p>}
       </Card>
-      {txs.length > 0 && <Card>
+      {txs.length > 0 && <Card className="lg:order-5 lg:col-span-2">
         <div className="mb-1 flex items-center justify-between"><h3 className="font-semibold">Recent</h3><button onClick={() => setTab('activity')} className="text-sm font-semibold text-azure">See all</button></div>
         <div className="divide-y divide-black/5 dark:divide-white/5">{txs.slice(0, 4).map(t => <TxRow key={t.id} t={t} />)}</div>
       </Card>}
@@ -163,7 +163,7 @@ function Activity({ txs, onDelete, onEdit }) {
   const list = txs.filter(t => (f === 'all' || t.type === f) && ((t.note || '') + get(t.category).name + t.pocket + (t.to || '')).toLowerCase().includes(q.toLowerCase()))
   let last = ''
   return (
-    <div>
+    <div className="lg:max-w-3xl">
       <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search transactions" className={field + ' bg-surface'} />
       <div className="my-3 flex gap-2">{[['all', 'All'], ['in', 'Income'], ['out', 'Expenses']].map(([k, l]) => <button key={k} onClick={() => setF(k)} className={'rounded-full px-4 py-1.5 text-sm font-medium ' + (f === k ? 'bg-azure text-white' : 'bg-surface text-slate-500')}>{l}</button>)}</div>
       {!list.length && <p className="mt-10 text-center text-slate-500">{txs.length ? 'Nothing matches.' : 'No transactions yet. Tap + to add one.'}</p>}
@@ -188,7 +188,7 @@ function Insights({ txs, pockets }) {
   const cats = [...new Set(inMonth.map(t => t.category))].map(c => ({ c, v: inMonth.filter(t => t.category === c).reduce((a, t) => a + t.amount, 0) })).filter(d => d.v > 0).sort((a, b) => b.v - a.v)
   const lab = { fontSize: 10, fill: '#868e96' }
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
       <Card>
         <h3 className="font-semibold">Income and spending</h3>
         <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full">
@@ -207,7 +207,7 @@ function Insights({ txs, pockets }) {
           {pts.map((p, i) => <g key={i}><circle cx={p[0]} cy={p[1]} r="4" fill="#3d7ddd" /><text x={p[0]} y="125" textAnchor="middle" {...lab}>{months[i].label}</text></g>)}
         </svg></Hide>
       </Card>
-      <Card>
+      <Card className="lg:col-span-2">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">By category</h3>
           <div className="flex gap-1 rounded-xl bg-paper p-1 text-xs font-semibold">{['This month', 'Last month'].map((l, i) => <button key={l} onClick={() => setWhich(i)} className={'rounded-lg px-2.5 py-1 ' + (which === i ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}</div>
@@ -226,8 +226,8 @@ function Budgets({ budgets, setBudgets, txs, onManage }) {
   const { active } = useCats()
   const spent = c => txs.filter(t => t.type === 'out' && t.category === c && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
+    <div className="space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0">
+      <div className="flex items-center justify-between gap-3 lg:col-span-2">
         <p className="text-sm text-slate-500">Set a monthly limit for each category. Leave it empty for no limit.</p>
         <button onClick={onManage} className="shrink-0 text-sm font-semibold text-azure">Edit categories</button>
       </div>
@@ -252,8 +252,8 @@ function Goals({ goals, setGoals, onFund }) {
   const [name, setName] = useState(''), [target, setTarget] = useState('')
   const add = () => { if (!name || !Number(target)) return; setGoals([...goals, { id: uid(), name, target: Number(target), base: 0 }]); setName(''); setTarget('') }
   return (
-    <div className="space-y-3">
-      <Card className="flex gap-2">
+    <div className="space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0">
+      <Card className="flex gap-2 lg:col-span-2">
         <input value={name} onChange={e => setName(e.target.value)} placeholder="Goal, e.g. Laptop" className={field + ' min-w-0 flex-1 py-2!'} />
         <input value={target} type="number" inputMode="numeric" onChange={e => setTarget(e.target.value)} placeholder="Target" className={field + ' w-24! py-2!'} />
         <button onClick={add} className="rounded-2xl bg-azure px-4 font-semibold text-white">Add</button>
@@ -277,9 +277,9 @@ function Goals({ goals, setGoals, onFund }) {
 }
 
 const Sheet = ({ children, onClose }) => (
-  <div className="fade-in fixed inset-0 z-30 flex items-end bg-black/50" onClick={onClose}>
-    <div className="sheet-in mx-auto w-full max-w-md max-h-[92dvh] space-y-3 overflow-y-auto rounded-t-[2rem] bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))]" onClick={e => e.stopPropagation()}>
-      <div className="mx-auto mb-1 h-1.5 w-10 rounded-full bg-mist" />{children}
+  <div className="fade-in fixed inset-0 z-30 flex items-end bg-black/50 lg:items-center lg:justify-center" onClick={onClose}>
+    <div className="sheet-in mx-auto w-full max-w-md max-h-[92dvh] space-y-3 overflow-y-auto rounded-t-[2rem] bg-surface p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] lg:mx-0 lg:max-w-lg lg:rounded-[2rem] lg:pb-6 lg:shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="mx-auto mb-1 h-1.5 w-10 rounded-full bg-mist lg:hidden" />{children}
     </div>
   </div>
 )
@@ -447,7 +447,7 @@ function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, o
   const [seg, setSeg] = useState('shop')
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-surface p-1">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-surface p-1 lg:max-w-xs">
         {[['shop', 'Shopping'], ['goals', 'Goals']].map(([k, l]) => <button key={k} onClick={() => setSeg(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (seg === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
       </div>
       {seg === 'shop' ? <Shopping shop={shop} setShop={setShop} budgets={budgets} txs={txs} pockets={pockets} onBuy={onBuy} onUnbuy={onUnbuy} /> : <Goals goals={goals} setGoals={setGoals} onFund={onFund} />}
@@ -494,7 +494,8 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
     </div>
   )
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 lg:grid lg:grid-cols-5 lg:items-start lg:gap-5 lg:space-y-0">
+      <div className="space-y-3 lg:col-span-2">
       <Card className="space-y-2">
         <div className="flex gap-2">
           <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Item, e.g. Maize flour" className={field + ' min-w-0 flex-1 py-2!'} />
@@ -518,6 +519,8 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
         <p className={'mt-1 text-sm ' + (planned > total ? 'text-down' : 'text-slate-500')}>{planned > total ? `${mk(planned - total)} more than your total balance` : `${mk(total - planned)} left of your ${mk(total)} after this list`}</p>
         {warn.map(w => <p key={w} className="mt-1 text-sm text-down">{w}</p>)}
       </Card>}
+      </div>
+      <div className="space-y-3 lg:col-span-3">
       {items.length === 0 && <p className="mt-6 text-center text-slate-500">Plan what you're going to buy. Tick items as you buy them and the money comes off your balance.</p>}
       {todo.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{todo.map(row)}</Card>}
       {bought.length > 0 && <>
@@ -540,6 +543,7 @@ function Shopping({ shop, setShop, budgets, txs, pockets, onBuy, onUnbuy }) {
         </Card>
         {theirs.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{[...theirs.filter(i => !i.done), ...theirs.filter(i => i.done)].map(row)}</Card>}
       </>}
+      </div>
     </div>
   )
 }
@@ -838,8 +842,9 @@ function Budgie({ onLock }) {
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <CatCtx.Provider value={catApi}>
-    <div className="mx-auto flex h-full max-w-md flex-col">
-      <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))]">
+    <div className="mx-auto flex h-full max-w-md flex-col lg:max-w-none lg:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] lg:px-10 lg:pb-4 lg:pt-8">
         <div>
           <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Budgie'}</p>
           <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? 'Your money' : TABS.find(t => t[0] === tab)[1]}</h1>
@@ -850,17 +855,22 @@ function Budgie({ onLock }) {
           <button onClick={() => setSheet('more')} aria-label="More" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="more" /></button>
         </div>
       </header>
-      <main className="flex-1 overflow-y-auto px-4 pb-36">
+      <main className="flex-1 overflow-y-auto px-4 pb-36 lg:px-10 lg:pb-10">
+        <div className="mx-auto w-full lg:max-w-6xl">
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
         {tab === 'home' && <Home pockets={pockets} txs={sorted} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
         {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
         {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} />}
+        </div>
       </main>
-      <button onClick={() => setSheet('add')} aria-label="Add transaction" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
-      <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5">
-        {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold ' + (tab === k ? 'text-azure' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 ' + (tab === k ? 'bg-azure/15' : '')}><Icon k={k} /></span>{l}</button>)}
+      </div>
+      <button onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
+      <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5 lg:static lg:order-first lg:mx-0 lg:w-64 lg:max-w-none lg:shrink-0 lg:flex-col lg:justify-start lg:gap-1 lg:overflow-y-auto lg:border-r lg:border-t-0 lg:px-4 lg:py-8 lg:backdrop-blur-none">
+        <p className="hidden px-4 pb-6 text-2xl font-bold text-navy lg:block">Budgie</p>
+        {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
+        <button onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
       </nav>
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}

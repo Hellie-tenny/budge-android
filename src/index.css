@@ -18,4 +18,5 @@ body { background: var(--color-paper); color: var(--color-ink); font-family: "Po
 @keyframes fade { from { opacity: 0; } }
 .sheet-in { animation: rise .26s cubic-bezier(.2, .8, .2, 1); }
 .fade-in { animation: fade .2s ease-out; }
+@media (min-width: 1024px) { .sheet-in { animation: fade .2s ease-out; } }
 @media (prefers-reduced-motion: reduce) { .sheet-in, .fade-in { animation: none; } }
