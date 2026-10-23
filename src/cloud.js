@@ -23,8 +23,9 @@ const app = initializeApp({
 let auth
 try { auth = isNative() ? initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence] }) : getAuth(app) } catch { auth = getAuth(app) }
 
-// The native Google plugin is only loaded inside the Android app.
-const nativeAuth = async () => (await import('@capacitor-firebase/authentication')).FirebaseAuthentication
+// The native Google plugin is only loaded inside the Android app. This returns the module, never the plugin itself:
+// a Capacitor plugin handed back through a promise gets treated as a promise and fails with ".then() is not implemented".
+const nativePlugin = () => import('@capacitor-firebase/authentication')
 
 // Calls fn with the signed-in person ({ uid, email }) or null. Returns a function that stops listening.
 export const watchUser = fn => onAuthStateChanged(auth, u => fn(u ? { uid: u.uid, email: u.email } : null))
@@ -37,13 +38,14 @@ export const signIn = (email, password) => signInWithEmailAndPassword(auth, emai
 export async function signInGoogle() {
   if (isNative()) {
     // The plugin shows the Google account picker; the Firebase web SDK then signs in with the token it returns.
-    const r = await (await nativeAuth()).signInWithGoogle({ skipNativeAuth: true })
+    const { FirebaseAuthentication } = await nativePlugin()
+    const r = await FirebaseAuthentication.signInWithGoogle({ skipNativeAuth: true })
     await signInWithCredential(auth, GoogleAuthProvider.credential(r.credential?.idToken))
   } else await signInWithPopup(auth, new GoogleAuthProvider())
 }
 export async function signOutUser() {
   await signOut(auth)
-  if (isNative()) { try { await (await nativeAuth()).signOut() } catch { /* nothing signed in natively */ } }
+  if (isNative()) { try { const { FirebaseAuthentication } = await nativePlugin(); await FirebaseAuthentication.signOut() } catch { /* nothing signed in natively */ } }
 }
 export const resetPassword = email => sendPasswordResetEmail(auth, email)
 
