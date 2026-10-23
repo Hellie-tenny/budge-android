@@ -40,7 +40,8 @@ export async function signInGoogle() {
     // The plugin shows the Google account picker; the Firebase web SDK then signs in with the token it returns.
     const { FirebaseAuthentication } = await nativePlugin()
     const r = await FirebaseAuthentication.signInWithGoogle({ skipNativeAuth: true })
-    await signInWithCredential(auth, GoogleAuthProvider.credential(r.credential?.idToken))
+    if (!r.credential?.idToken) throw new Error('Google did not return an ID token. Check google-services.json.')
+    await signInWithCredential(auth, GoogleAuthProvider.credential(r.credential.idToken))
   } else await signInWithPopup(auth, new GoogleAuthProvider())
 }
 export async function signOutUser() {
@@ -62,6 +63,6 @@ export function authMessage(e) {
     case 'auth/weak-password': return 'Choose a stronger password.'
     case 'auth/too-many-requests': return 'Too many attempts. Wait a few minutes and try again.'
     case 'auth/network-request-failed': return 'No internet connection.'
-    default: return 'Something went wrong. Please try again.'
+    default: return 'Something went wrong. Please try again. (' + [e?.code, e?.message].filter(Boolean).join(': ').slice(0, 200) + ')'
   }
 }

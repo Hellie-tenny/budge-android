@@ -613,7 +613,7 @@ function BuySheet({ item, pockets, onSave, onClose }) {
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
 // Change this each time you push, so More shows which build is installed on the phone.
-const BUILD = '23 Oct, build 1'
+const BUILD = '23 Oct, build 2'
 
 function MoreSheet({ lastBackup, user, onPick, onClose }) {
   const [info, setInfo] = useState(null)
