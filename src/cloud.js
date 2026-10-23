@@ -50,6 +50,9 @@ export async function signOutUser() {
 }
 export const resetPassword = email => sendPasswordResetEmail(auth, email)
 
+// TEST MARKER: remove later. Shows which build is installed.
+export const BUILD_TAG = 'test-1'
+
 export function authMessage(e) {
   if (/cancel/i.test(e?.code + ' ' + e?.message)) return ''   // the person closed the Google window: not an error
   switch (e?.code) {
@@ -63,6 +66,6 @@ export function authMessage(e) {
     case 'auth/weak-password': return 'Choose a stronger password.'
     case 'auth/too-many-requests': return 'Too many attempts. Wait a few minutes and try again.'
     case 'auth/network-request-failed': return 'No internet connection.'
-    default: return 'Something went wrong. Please try again. (' + [e?.code, e?.message].filter(Boolean).join(': ').slice(0, 200) + ')'
+    default: return 'Something went wrong. Please try again. (' + [e?.code, e?.message].filter(Boolean).join(': ').slice(0, 200) + ') [' + BUILD_TAG + ']'
   }
 }

@@ -439,7 +439,7 @@ function CloudSheet({ user, onClose }) {
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">{mode === 'up' ? 'Create an account' : mode === 'reset' ? 'Reset password' : 'Sign in'}</h3>
-      <p className="text-center text-sm text-slate-500">Optional. Sprout works fully without an account.</p>
+      <p className="text-center text-sm text-slate-500">Optional. Sprout works fully without an account. (TEST BUILD 1)</p>
       {mode !== 'reset' && <>
         <button onClick={() => go(async () => { await signInGoogle(); onClose() })} disabled={busy} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-paper py-3.5 font-semibold disabled:opacity-40"><span className="text-xl font-bold text-[#4285f4]">G</span>Continue with Google</button>
         <p className="text-center text-xs text-slate-500">or use an email and password</p>
