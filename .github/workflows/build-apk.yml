@@ -36,6 +36,8 @@ jobs:
           mkdir -p ~/.android
           echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
           test -s ~/.android/debug.keystore || { echo "keystore is empty: add the DEBUG_KEYSTORE_BASE64 secret"; exit 1; }
+      - name: Show the signing fingerprint
+        run: keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep "SHA1:"
 
       - run: ./gradlew assembleDebug
         working-directory: android
