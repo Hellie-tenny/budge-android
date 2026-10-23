@@ -24,6 +24,14 @@ export async function shareFile(name, text, title = 'Sprout backup') {
   catch (e) { if (/cancel/i.test(String(e?.message ?? e))) return 'cancelled'; throw e }
 }
 
+// The installed app's package name (for example com.sprout.app), or null outside the Android app.
+// Returns plain data only: a Capacitor plugin must never be returned from a promise.
+export async function appInfo() {
+  const app = plugin('App')
+  if (!app?.getInfo) return null
+  try { const i = await app.getInfo(); return { id: i.id } } catch { return null }
+}
+
 // Listens to a Capacitor App event. Returns a function that stops listening.
 function listen(event, fn) {
   const app = plugin('App')

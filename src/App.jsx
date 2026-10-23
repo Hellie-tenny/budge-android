@@ -3,7 +3,7 @@ import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, 
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, resetPassword, authMessage } from './cloud.js'
-import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
+import { isNative, shareFile, onBackButton, exitApp, onAppState, appInfo } from './native.js'
 
 // Categories are saved data (stored under the key budgie.cats; the budgie.* storage keys keep their old name on purpose). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -612,7 +612,12 @@ function BuySheet({ item, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
+// Change this each time you push, so More shows which build is installed on the phone.
+const BUILD = '23 Oct, build 1'
+
 function MoreSheet({ lastBackup, user, onPick, onClose }) {
+  const [info, setInfo] = useState(null)
+  useEffect(() => { appInfo().then(setInfo) }, [])
   const rows = [
     ['cloud', 'Account', user ? user.email : 'Sign in to use Sprout on more devices'],
     ['backup', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
@@ -623,6 +628,7 @@ function MoreSheet({ lastBackup, user, onPick, onClose }) {
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">More</h3>
       {rows.map(([k, l, sub]) => <button key={k} onClick={() => onPick(k)} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left active:bg-paper"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-paper text-azure"><Icon k={k} /></span><span className="min-w-0 flex-1"><span className="block font-medium">{l}</span><span className="block text-xs text-slate-500">{sub}</span></span><span className="text-slate-400">›</span></button>)}
+      <p className="pt-1 text-center text-xs text-slate-400">Sprout · {BUILD}{info ? ' · ' + info.id : ''}</p>
     </Sheet>
   )
 }
