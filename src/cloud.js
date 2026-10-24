@@ -5,7 +5,8 @@ import { initializeApp } from 'firebase/app'
 import {
   initializeAuth, getAuth, indexedDBLocalPersistence, browserLocalPersistence, onAuthStateChanged,
   createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail, sendEmailVerification,
-  GoogleAuthProvider, signInWithPopup, signInWithCredential,
+  GoogleAuthProvider, EmailAuthProvider, signInWithPopup, signInWithCredential,
+  reauthenticateWithCredential, reauthenticateWithPopup, deleteUser,
 } from 'firebase/auth'
 import { isNative } from './native.js'
 
@@ -28,7 +29,7 @@ try { auth = isNative() ? initializeAuth(app, { persistence: [indexedDBLocalPers
 const nativePlugin = () => import('@capacitor-firebase/authentication')
 
 // Calls fn with the signed-in person ({ uid, email }) or null. Returns a function that stops listening.
-export const watchUser = fn => onAuthStateChanged(auth, u => fn(u ? { uid: u.uid, email: u.email } : null))
+export const watchUser = fn => onAuthStateChanged(auth, u => fn(u ? { uid: u.uid, email: u.email, hasPassword: u.providerData.some(p => p.providerId === 'password') } : null))
 
 export async function signUp(email, password) {
   const { user } = await createUserWithEmailAndPassword(auth, email, password)
@@ -48,10 +49,23 @@ export async function signOutUser() {
   await signOut(auth)
   if (isNative()) { try { const { FirebaseAuthentication } = await nativePlugin(); await FirebaseAuthentication.signOut() } catch { /* nothing signed in natively */ } }
 }
+// Permanently deletes the signed-in account. Firebase wants a recent sign-in for this, so the person proves it is them
+// again first (password, or the Google account picker). Data on this device is not touched.
+export async function deleteAccount(password) {
+  const u = auth.currentUser
+  if (!u) return
+  if (u.providerData.some(p => p.providerId === 'password')) {
+    await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, password || ''))
+  } else if (isNative()) {
+    const { FirebaseAuthentication } = await nativePlugin()
+    const r = await FirebaseAuthentication.signInWithGoogle({ skipNativeAuth: true })
+    if (!r.credential?.idToken) throw new Error('Google did not return an ID token.')
+    await reauthenticateWithCredential(u, GoogleAuthProvider.credential(r.credential.idToken))
+  } else await reauthenticateWithPopup(u, new GoogleAuthProvider())
+  await deleteUser(u)
+  if (isNative()) { try { const { FirebaseAuthentication } = await nativePlugin(); await FirebaseAuthentication.signOut() } catch { /* nothing signed in natively */ } }
+}
 export const resetPassword = email => sendPasswordResetEmail(auth, email)
-
-// TEST MARKER: remove later. Shows which build is installed.
-export const BUILD_TAG = 'test-1'
 
 export function authMessage(e) {
   if (/cancel/i.test(e?.code + ' ' + e?.message)) return ''   // the person closed the Google window: not an error
@@ -64,8 +78,9 @@ export function authMessage(e) {
     case 'auth/invalid-credential': case 'auth/wrong-password': case 'auth/user-not-found': return 'Wrong email or password.'
     case 'auth/email-already-in-use': return 'An account with this email already exists. Try signing in.'
     case 'auth/weak-password': return 'Choose a stronger password.'
+    case 'auth/requires-recent-login': return 'Please sign in again, then try once more.'
     case 'auth/too-many-requests': return 'Too many attempts. Wait a few minutes and try again.'
     case 'auth/network-request-failed': return 'No internet connection.'
-    default: return 'Something went wrong. Please try again. (' + [e?.code, e?.message].filter(Boolean).join(': ').slice(0, 200) + ') [' + BUILD_TAG + ']'
+    default: return 'Something went wrong. Please try again.'
   }
 }

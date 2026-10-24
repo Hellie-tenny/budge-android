@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext } f
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
-import { watchUser, signUp, signIn, signInGoogle, signOutUser, resetPassword, authMessage } from './cloud.js'
-import { isNative, shareFile, onBackButton, exitApp, onAppState, appInfo } from './native.js'
+import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
+import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 
 // Categories are saved data (stored under the key budgie.cats; the budgie.* storage keys keep their old name on purpose). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -412,10 +412,24 @@ function AccountSheet({ onSave, onClose }) {
 
 function CloudSheet({ user, onClose }) {
   const [mode, setMode] = useState('in'), [email, setEmail] = useState(''), [pw, setPw] = useState(''), [pw2, setPw2] = useState('')
-  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState('')
+  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState(''), [del, setDel] = useState(false)
   const go = async fn => { setBusy(true); setErr(''); setInfo(''); try { await fn() } catch (e) { setErr(authMessage(e)) } setBusy(false) }
   const mail = email.trim()
   const switchTo = m => { setMode(m); setErr(''); setInfo('') }
+  if (user && del) return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Delete account</h3>
+      <Card>
+        <p className="text-sm text-slate-500">This permanently deletes your Sprout sign-in account for <span className="break-all font-semibold text-ink">{user.email}</span>. It cannot be undone.</p>
+        <p className="mt-2 text-sm text-slate-500">Your budget data is only on this device, so it is not deleted. To remove it too, back it up first if you want to keep it, then clear Sprout's storage or uninstall the app.</p>
+      </Card>
+      <p className="text-center text-xs text-slate-500">{user.hasPassword ? 'Enter your password to confirm it is you.' : 'You will be asked to choose your Google account again to confirm it is you.'}</p>
+      {user.hasPassword && <input value={pw} type="password" autoComplete="current-password" onChange={e => setPw(e.target.value)} placeholder="Password" className={field} />}
+      {err && <p className="text-sm text-down">{err}</p>}
+      <button onClick={() => go(async () => { await deleteAccount(pw); onClose() })} disabled={busy || (user.hasPassword && !pw)} className="w-full rounded-2xl bg-down py-3 font-semibold text-white disabled:opacity-40">{busy ? 'Deleting…' : 'Delete my account permanently'}</button>
+      <button onClick={() => { setDel(false); setErr(''); setPw('') }} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold disabled:opacity-40">Cancel</button>
+    </Sheet>
+  )
   if (user) return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">Account</h3>
@@ -425,6 +439,7 @@ function CloudSheet({ user, onClose }) {
         <p className="mt-2 text-sm text-slate-500">Syncing between your devices is not switched on yet. Your data is still only on this device.</p>
       </Card>
       <button onClick={() => confirm('Sign out of this device? Your data stays on this device.') && go(signOutUser)} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold text-down disabled:opacity-40">Sign out</button>
+      <button onClick={() => { setDel(true); setErr('') }} disabled={busy} className="w-full py-2 text-sm font-semibold text-slate-500 disabled:opacity-40">Delete account</button>
     </Sheet>
   )
   const submit = () => go(async () => {
@@ -439,7 +454,7 @@ function CloudSheet({ user, onClose }) {
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">{mode === 'up' ? 'Create an account' : mode === 'reset' ? 'Reset password' : 'Sign in'}</h3>
-      <p className="text-center text-sm text-slate-500">Optional. Sprout works fully without an account. (TEST BUILD 1)</p>
+      <p className="text-center text-sm text-slate-500">Optional. Sprout works fully without an account.</p>
       {mode !== 'reset' && <>
         <button onClick={() => go(async () => { await signInGoogle(); onClose() })} disabled={busy} className="flex w-full items-center justify-center gap-3 rounded-2xl bg-paper py-3.5 font-semibold disabled:opacity-40"><span className="text-xl font-bold text-[#4285f4]">G</span>Continue with Google</button>
         <p className="text-center text-xs text-slate-500">or use an email and password</p>
@@ -612,23 +627,44 @@ function BuySheet({ item, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-// Change this each time you push, so More shows which build is installed on the phone.
-const BUILD = '23 Oct, build 2'
+const APP_VERSION = '1.0.0'
+
+function AboutSheet({ onClose }) {
+  const Part = ({ title, children }) => <div><p className="text-sm font-semibold">{title}</p><p className="text-sm text-slate-500">{children}</p></div>
+  return (
+    <Sheet onClose={onClose}>
+      <div className="text-center">
+        <p className="text-2xl font-bold text-navy">Sprout</p>
+        <p className="text-xs text-slate-500">Version {APP_VERSION}</p>
+      </div>
+      <p className="text-center text-sm text-slate-500">A simple budget app for tracking your money in Kwacha: accounts, spending, budgets, goals and shopping plans.</p>
+      <Card>
+        <div className="space-y-3">
+          <Part title="Your data stays on your device">Everything you enter is stored on this phone or browser. Nothing is uploaded, and there are no ads or tracking.</Part>
+          <Part title="Optional account">Signing in with Google or an email and password only identifies you. Syncing between devices is not switched on yet, so signing in does not upload your budget. We keep only your sign-in details (your email address), handled by Google Firebase Authentication.</Part>
+          <Part title="PIN lock">If you set a PIN, your data is encrypted on the device. If you forget the PIN and lose your recovery code, the data cannot be opened, so keep the recovery code safe.</Part>
+          <Part title="Backups">Back up from More, then Backup and restore. A backup is a file you keep yourself, and you can protect it with a password. Backups are the only way to move your data to a new phone for now.</Part>
+          <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your sign-in account yourself any time from More, then Account, then Delete account.</Part>
+        </div>
+      </Card>
+      <p className="text-center text-xs text-slate-400">Built by Hellings</p>
+    </Sheet>
+  )
+}
 
 function MoreSheet({ lastBackup, user, onPick, onClose }) {
-  const [info, setInfo] = useState(null)
-  useEffect(() => { appInfo().then(setInfo) }, [])
   const rows = [
     ['cloud', 'Account', user ? user.email : 'Sign in to use Sprout on more devices'],
     ['backup', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
     ['recurring', 'Recurring transactions', 'Rent, salary, regular top-ups'],
     ['cats', 'Categories', 'Add, rename or hide'],
+    ['about', 'About Sprout', 'Version, privacy and how your data is kept'],
   ]
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">More</h3>
       {rows.map(([k, l, sub]) => <button key={k} onClick={() => onPick(k)} className="flex w-full items-center gap-3 rounded-2xl p-2 text-left active:bg-paper"><span className="grid h-10 w-10 place-items-center rounded-2xl bg-paper text-azure"><Icon k={k} /></span><span className="min-w-0 flex-1"><span className="block font-medium">{l}</span><span className="block text-xs text-slate-500">{sub}</span></span><span className="text-slate-400">›</span></button>)}
-      <p className="pt-1 text-center text-xs text-slate-400">Sprout · {BUILD}{info ? ' · ' + info.id : ''}</p>
+      <p className="pt-1 text-center text-xs text-slate-400">Sprout · v{APP_VERSION}</p>
     </Sheet>
   )
 }
@@ -773,7 +809,7 @@ function RecurSheet({ rules, pockets, onSave, onDelete, onNeedPin, onClose }) {
 }
 
 const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['plan', 'Plan']]
-const ICONS = { cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
+const ICONS = { cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
 function Sprout({ onLock }) {
@@ -933,6 +969,7 @@ function Sprout({ onLock }) {
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} onSave={buy} onClose={() => setSheet(null)} />}
       {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'about' && <AboutSheet onClose={() => setSheet(null)} />}
       {sheet === 'cloud' && <CloudSheet user={user} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
       {sheet === 'recurring' && <RecurSheet rules={recurring} pockets={pockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
