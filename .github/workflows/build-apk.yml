@@ -36,6 +36,21 @@ jobs:
           mkdir -p ~/.android
           echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
           test -s ~/.android/debug.keystore || { echo "keystore is empty: add the DEBUG_KEYSTORE_BASE64 secret"; exit 1; }
+      - name: Make the build sign with the fixed key
+        run: |
+          cat >> android/app/build.gradle <<'EOF'
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile file(System.getProperty('user.home') + '/.android/debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+          }
+          EOF
       - name: Show the signing fingerprint
         run: keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep "SHA1:"
       - name: Print Firebase and signing details
