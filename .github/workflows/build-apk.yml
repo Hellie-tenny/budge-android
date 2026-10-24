@@ -38,6 +38,16 @@ jobs:
           test -s ~/.android/debug.keystore || { echo "keystore is empty: add the DEBUG_KEYSTORE_BASE64 secret"; exit 1; }
       - name: Show the signing fingerprint
         run: keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep "SHA1:"
+      - name: Print Firebase and signing details
+        run: |
+          J=android/app/google-services.json
+          echo "Signing key SHA-1: $(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey | grep 'SHA1:' | sed 's/.*SHA1: //')"
+          echo "project_id:     $(jq -r '.project_info.project_id' $J)"
+          echo "project_number: $(jq -r '.project_info.project_number' $J)"
+          echo "package_name:   $(jq -r '.client[].client_info.android_client_info.package_name' $J)"
+          echo "Android clients (type 1) cert hashes in the file:"
+          jq -r '.client[].oauth_client[]? | select(.client_type==1) | .android_info.certificate_hash' $J
+          echo "Web clients (type 3) in the file: $(jq '[.client[].oauth_client[]? | select(.client_type==3)] | length' $J)"
 
       - run: ./gradlew assembleDebug
         working-directory: android
