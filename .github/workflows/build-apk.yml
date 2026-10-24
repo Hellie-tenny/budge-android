@@ -51,6 +51,12 @@ jobs:
 
       - run: ./gradlew assembleDebug
         working-directory: android
+      - name: Show APK signing fingerprint
+        continue-on-error: true
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER="$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)apksigner"
+          "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep "SHA-1"
       - uses: actions/upload-artifact@v4
         with:
           name: sprout-apk
