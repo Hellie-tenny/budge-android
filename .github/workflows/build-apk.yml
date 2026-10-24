@@ -72,6 +72,24 @@ jobs:
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           APKSIGNER="$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)apksigner"
           "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep "SHA-1"
+      # Put the APK and the update file on the website, then publish it. Runs only on main.
+      - name: Add the APK and update file to the website
+        if: github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/App.jsx)
+          test -n "$VERSION" || { echo "Could not read APP_VERSION from src/App.jsx"; exit 1; }
+          mkdir -p dist/downloads
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/downloads/sprout.apk
+          jq -n --arg v "$VERSION" --arg u "https://sprout-ledger.web.app/downloads/sprout.apk" --arg n "$(git log -1 --pretty=%s)" \
+            '{version:$v,url:$u,notes:$n}' > dist/version.json
+          cat dist/version.json
+      - name: Publish the website
+        if: github.ref == 'refs/heads/main'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPROUT_LEDGER }}
+          projectId: sprout-ledger
+          channelId: live
       - uses: actions/upload-artifact@v4
         with:
           name: sprout-apk

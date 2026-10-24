@@ -764,6 +764,7 @@ function AboutSheet({ onClose }) {
           <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your synced data, or your whole account, yourself at any time from More, then Sync or Account. Deleting your account also deletes your synced data.</Part>
         </div>
       </Card>
+      {!isNative() && <a href="/downloads/sprout.apk" download="sprout.apk" className="block w-full rounded-2xl bg-azure py-3 text-center font-semibold text-white">Download the Android app</a>}
       <p className="text-center text-xs text-slate-400">Built by Hellings</p>
     </Sheet>
   )
