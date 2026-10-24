@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, createContext, useContext } f
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
+import AndroidUpdate from './AndroidUpdate.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
@@ -1117,6 +1118,7 @@ export default function App() {
   return (
     <>
       {!window.Capacitor?.isNativePlatform?.() && <UpdatePrompt />}
+      {isNative() && <AndroidUpdate current={APP_VERSION} />}
       {locked ? <LockScreen onUnlock={() => setLocked(false)} /> : <Sprout onLock={() => { lock(); setLocked(true) }} />}
     </>
   )
