@@ -4,6 +4,9 @@ import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, 
 import UpdatePrompt from './UpdatePrompt.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
+import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
+import { getMeta, putMeta, deleteCloudData, syncMessage } from './syncCloud.js'
+import { useSync } from './useSync.js'
 
 // Categories are saved data (stored under the key budgie.cats; the budgie.* storage keys keep their old name on purpose). Transactions store the category id, so renaming never breaks history.
 // Starter ids equal their old names, so existing data keeps working. kind: 'out' | 'in' | 'both'.
@@ -54,7 +57,8 @@ function useStore(key, init, onRemove) {
     if (cb.current && Array.isArray(v) && Array.isArray(last.current)) { const gone = removedIds(last.current, v); if (gone.length) cb.current(gone) }
     last.current = v
   }, [key, v])
-  return [v, set]
+  const raw = useCallback(next => { last.current = next; setV(next) }, []) // writes data that arrived from the cloud: no new stamp, no deletion log entry
+  return [v, set, raw]
 }
 
 const Card = ({ children, className = '' }) => <div className={'rounded-3xl border border-black/5 bg-surface p-4 dark:border-white/5 ' + className}>{children}</div>
@@ -410,7 +414,7 @@ function AccountSheet({ onSave, onClose }) {
   )
 }
 
-function CloudSheet({ user, onClose }) {
+function CloudSheet({ user, onSync, onSignedOut, onClose }) {
   const [mode, setMode] = useState('in'), [email, setEmail] = useState(''), [pw, setPw] = useState(''), [pw2, setPw2] = useState('')
   const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [info, setInfo] = useState(''), [del, setDel] = useState(false)
   const go = async fn => { setBusy(true); setErr(''); setInfo(''); try { await fn() } catch (e) { setErr(authMessage(e)) } setBusy(false) }
@@ -421,12 +425,12 @@ function CloudSheet({ user, onClose }) {
       <h3 className="text-center font-semibold">Delete account</h3>
       <Card>
         <p className="text-sm text-slate-500">This permanently deletes your Sprout sign-in account for <span className="break-all font-semibold text-ink">{user.email}</span>. It cannot be undone.</p>
-        <p className="mt-2 text-sm text-slate-500">Your budget data is only on this device, so it is not deleted. To remove it too, back it up first if you want to keep it, then clear Sprout's storage or uninstall the app.</p>
+        <p className="mt-2 text-sm text-slate-500">Anything you synced to the cloud is deleted with it. The data on this device stays. To remove it too, back it up first if you want to keep it, then clear Sprout's storage or uninstall the app.</p>
       </Card>
       <p className="text-center text-xs text-slate-500">{user.hasPassword ? 'Enter your password to confirm it is you.' : 'You will be asked to choose your Google account again to confirm it is you.'}</p>
       {user.hasPassword && <input value={pw} type="password" autoComplete="current-password" onChange={e => setPw(e.target.value)} placeholder="Password" className={field} />}
       {err && <p className="text-sm text-down">{err}</p>}
-      <button onClick={() => go(async () => { await deleteAccount(pw); onClose() })} disabled={busy || (user.hasPassword && !pw)} className="w-full rounded-2xl bg-down py-3 font-semibold text-white disabled:opacity-40">{busy ? 'Deleting…' : 'Delete my account permanently'}</button>
+      <button onClick={() => go(async () => { await deleteAccount(pw, deleteCloudData); onSignedOut(); onClose() })} disabled={busy || (user.hasPassword && !pw)} className="w-full rounded-2xl bg-down py-3 font-semibold text-white disabled:opacity-40">{busy ? 'Deleting…' : 'Delete my account permanently'}</button>
       <button onClick={() => { setDel(false); setErr(''); setPw('') }} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold disabled:opacity-40">Cancel</button>
     </Sheet>
   )
@@ -436,9 +440,10 @@ function CloudSheet({ user, onClose }) {
       <Card>
         <p className="text-xs text-slate-500">Signed in as</p>
         <p className="break-all font-semibold">{user.email}</p>
-        <p className="mt-2 text-sm text-slate-500">Syncing between your devices is not switched on yet. Your data is still only on this device.</p>
+        <p className="mt-2 text-sm text-slate-500">Signing in does not upload anything by itself. To keep your data on all your devices, turn on sync.</p>
       </Card>
-      <button onClick={() => confirm('Sign out of this device? Your data stays on this device.') && go(signOutUser)} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold text-down disabled:opacity-40">Sign out</button>
+      <button onClick={onSync} className="w-full rounded-2xl bg-azure py-3 font-semibold text-white">Sync settings</button>
+      <button onClick={() => confirm('Sign out of this device? Your data stays on this device, and sync stops until you sign in again.') && go(async () => { await signOutUser(); onSignedOut() })} disabled={busy} className="w-full rounded-2xl bg-paper py-3 font-semibold text-down disabled:opacity-40">Sign out</button>
       <button onClick={() => { setDel(true); setErr('') }} disabled={busy} className="w-full py-2 text-sm font-semibold text-slate-500 disabled:opacity-40">Delete account</button>
     </Sheet>
   )
@@ -629,6 +634,116 @@ const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { 
 
 const APP_VERSION = '1.0.0'
 
+const CodeBox = ({ code }) => (
+  <div className="rounded-2xl bg-paper p-4 text-center">
+    <p className="select-all break-all font-mono text-lg font-semibold tracking-wider">{code}</p>
+    <button onClick={() => navigator.clipboard?.writeText(code)} className="mt-2 text-sm font-semibold text-azure">Copy</button>
+  </div>
+)
+
+function SyncSheet({ user, sync, status, pristine, onEnable, onDisable, onSyncNow, onSignIn, onClose }) {
+  const [view, setView] = useState('home'), [meta, setMeta] = useState(undefined) // meta: undefined = loading, false = could not load, null = no sync set up yet
+  const [p1, setP1] = useState(''), [p2, setP2] = useState(''), [useCode, setUseCode] = useState(false)
+  const [made, setMade] = useState(null), [saved, setSaved] = useState(false), [opened, setOpened] = useState(null)
+  const [busy, setBusy] = useState(false), [err, setErr] = useState(''), [msg, setMsg] = useState('')
+  const mine = !!(sync && user && sync.uid === user.uid)
+  const go = async fn => { setBusy(true); setErr(''); setMsg(''); try { await fn() } catch (e) { setErr(syncMessage(e)) } setBusy(false) }
+  const load = () => { setMeta(undefined); setErr(''); getMeta(user.uid).then(setMeta).catch(e => { setErr(syncMessage(e)); setMeta(false) }) }
+  useEffect(() => { if (user && !mine) load() }, [user?.uid, mine]) // eslint-disable-line react-hooks/exhaustive-deps
+  const primary = 'w-full rounded-2xl bg-azure py-3 font-semibold text-white disabled:opacity-40', plain = 'w-full rounded-2xl bg-paper py-3 font-semibold disabled:opacity-40'
+  const pass = (v, set, ph) => <input type="password" value={v} onChange={e => set(e.target.value)} placeholder={ph} autoComplete="off" className={field} />
+  const check = () => { const pr = passphraseProblem(p1); if (pr) throw new Error(pr); if (p1 !== p2) throw new Error("The two passphrases don't match.") }
+  const note = <>{err && <p className="text-sm text-down">{err}</p>}{msg && <p className="text-sm text-up">{msg}</p>}</>
+  const back = to => <button onClick={() => { setView(to); setErr(''); setP1(''); setP2('') }} disabled={busy} className={plain}>Back</button>
+  const head = <h3 className="text-center font-semibold">Sync</h3>
+
+  if (!user) return (
+    <Sheet onClose={onClose}>{head}
+      <Card><p className="text-sm text-slate-500">Sync keeps your budget on all your devices. You need to sign in first.</p></Card>
+      <button onClick={onSignIn} className={primary}>Sign in</button>
+    </Sheet>
+  )
+
+  if (mine && view === 'pass') return (
+    <Sheet onClose={onClose}>{head}
+      <p className="text-center text-sm text-slate-500">Choose a new sync passphrase. Devices already connected keep working; new devices use the new one.</p>
+      {pass(p1, setP1, 'New passphrase (10+ characters)')}{pass(p2, setP2, 'Repeat the new passphrase')}{note}
+      <button disabled={busy || !p1} className={primary} onClick={() => go(async () => { check(); const m = await getMeta(user.uid); await putMeta(user.uid, await changePassphrase(m, await importSyncKey(sync.key), p1)); setView('home'); setP1(''); setP2(''); setMsg('Passphrase changed.') })}>{busy ? 'Saving…' : 'Change passphrase'}</button>
+      {back('home')}
+    </Sheet>
+  )
+  if (mine && view === 'newcode') return (
+    <Sheet onClose={onClose}>{head}
+      <p className="text-center text-sm text-slate-500">Your new recovery code. The old one no longer works. It is shown only now, so write it down or keep it in a password manager.</p>
+      <CodeBox code={made.code} />
+      <button onClick={() => { setMade(null); setView('home') }} className={primary}>Done</button>
+    </Sheet>
+  )
+  if (mine) return (
+    <Sheet onClose={onClose}>{head}
+      <Card>
+        <p className="text-sm font-semibold">Sync is on</p>
+        <p className="text-sm text-slate-500">{status.state === 'syncing' ? 'Syncing…' : status.state === 'error' ? status.error : sync.last ? 'Last synced ' + new Date(sync.last).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Not synced yet'}</p>
+        {status.bad > 0 && <p className="mt-1 text-sm text-down">{status.bad} item(s) could not be opened and were skipped.</p>}
+        <p className="mt-2 text-xs text-slate-500">Your data is encrypted on this device before it is uploaded. Nobody else can read it, including the people who run Sprout.</p>
+      </Card>
+      {note}
+      <button onClick={onSyncNow} disabled={status.state === 'syncing'} className={primary}>Sync now</button>
+      <button onClick={() => { setView('pass'); setErr(''); setMsg('') }} className={plain}>Change sync passphrase</button>
+      <button disabled={busy} onClick={() => go(async () => { const m = await getMeta(user.uid); const r = await newRecoveryCode(m, await importSyncKey(sync.key)); await putMeta(user.uid, r.meta); setMade({ code: r.code }); setView('newcode') })} className={plain}>Get a new recovery code</button>
+      <button onClick={() => confirm('Turn off sync on this device? Your data stays here, and your synced copy stays in the cloud.') && onDisable()} className={plain}>Turn off sync on this device</button>
+      <button disabled={busy} onClick={() => confirm('Delete your synced data from the cloud and turn sync off? Data on your devices is not deleted. This cannot be undone.') && go(async () => { await deleteCloudData(user.uid); onDisable() })} className="w-full py-2 text-sm font-semibold text-down disabled:opacity-40">Delete my synced data from the cloud</button>
+    </Sheet>
+  )
+
+  // Sync is not on for this account on this device
+  if (view === 'create') return (
+    <Sheet onClose={onClose}>{head}
+      <p className="text-center text-sm text-slate-500">Choose a sync passphrase. Your data is locked with it before it leaves this device, and you will enter it on each new device. We cannot reset it for you.</p>
+      {pass(p1, setP1, 'Passphrase (10+ characters)')}{pass(p2, setP2, 'Repeat the passphrase')}{note}
+      <button disabled={busy || !p1} className={primary} onClick={() => go(async () => { check(); if (await getMeta(user.uid)) { load(); setView('home'); throw new Error('Sync was already set up on your account. Enter your passphrase to connect this device.') } setMade(await createSyncKey(p1)); setSaved(false); setView('code') })}>{busy ? 'Working…' : 'Continue'}</button>
+      {back('home')}
+    </Sheet>
+  )
+  if (view === 'code' && made) return (
+    <Sheet onClose={onClose}>{head}
+      <h4 className="text-center font-semibold">Save your recovery code</h4>
+      <p className="text-center text-sm text-slate-500">If you forget your passphrase, this code is the only way back in. It is shown once. Write it down or keep it in a password manager. If you lose both, your synced data cannot be recovered (the data on your devices is not affected).</p>
+      <CodeBox code={made.recoveryCode} />
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} /> I have saved my recovery code</label>
+      {note}
+      <button disabled={busy || !saved} className={primary} onClick={() => go(async () => { await putMeta(user.uid, made.meta); await onEnable(made.key, 'normal'); setMade(null); setP1(''); setP2(''); setView('home') })}>{busy ? 'Turning on…' : 'Turn on sync'}</button>
+    </Sheet>
+  )
+  if (view === 'choose') return (
+    <Sheet onClose={onClose}>{head}
+      <p className="text-center text-sm text-slate-500">This device already has data, and your account has synced data too. What would you like to do?</p>
+      {note}
+      <button disabled={busy} className={primary} onClick={() => go(() => onEnable(opened, 'combine'))}>Combine them (keep both)</button>
+      <button disabled={busy} className={plain} onClick={() => confirm('Replace the data on this device with your synced data? Anything here that is not already synced will be lost.') && go(() => onEnable(opened, 'replace'))}>Use the synced data (replace this device)</button>
+      {back('home')}
+    </Sheet>
+  )
+  return (
+    <Sheet onClose={onClose}>{head}
+      {meta === undefined && <p className="text-center text-sm text-slate-500">Checking your account…</p>}
+      {meta === false && <>{note}<button onClick={load} className={primary}>Try again</button></>}
+      {meta === null && <>
+        <Card><p className="text-sm text-slate-500">Turn on sync to keep your budget on all your devices. Your data is encrypted on this device before it is uploaded, so only you can read it.</p></Card>
+        {note}
+        <button onClick={() => { setView('create'); setErr('') }} className={primary}>Turn on sync</button>
+      </>}
+      {meta && <>
+        <p className="text-center text-sm text-slate-500">Sync is already set up on your account. Enter {useCode ? 'your recovery code' : 'your sync passphrase'} to connect this device.</p>
+        {useCode ? <input value={p1} onChange={e => setP1(e.target.value)} placeholder="Recovery code" autoComplete="off" autoCapitalize="characters" className={field} /> : pass(p1, setP1, 'Sync passphrase')}
+        {note}
+        <button disabled={busy || !p1} className={primary} onClick={() => go(async () => { const key = await openSyncKey(meta, p1, useCode ? 'rec' : 'pass'); if (pristine) await onEnable(key, 'replace'); else { setOpened(key); setView('choose') } setP1('') })}>{busy ? 'Connecting…' : 'Connect this device'}</button>
+        <button onClick={() => { setUseCode(!useCode); setP1(''); setErr('') }} className="w-full py-2 text-sm font-semibold text-azure">{useCode ? 'Use my passphrase instead' : 'I forgot my passphrase'}</button>
+      </>}
+    </Sheet>
+  )
+}
+
 function AboutSheet({ onClose }) {
   const Part = ({ title, children }) => <div><p className="text-sm font-semibold">{title}</p><p className="text-sm text-slate-500">{children}</p></div>
   return (
@@ -640,11 +755,12 @@ function AboutSheet({ onClose }) {
       <p className="text-center text-sm text-slate-500">A simple budget app for tracking your money in Kwacha: accounts, spending, budgets, goals and shopping plans.</p>
       <Card>
         <div className="space-y-3">
-          <Part title="Your data stays on your device">Everything you enter is stored on this phone or browser. Nothing is uploaded, and there are no ads or tracking.</Part>
-          <Part title="Optional account">Signing in with Google or an email and password only identifies you. Syncing between devices is not switched on yet, so signing in does not upload your budget. We keep only your sign-in details (your email address), handled by Google Firebase Authentication.</Part>
+          <Part title="Your data stays yours">Everything you enter is stored on this phone or browser. Nothing is uploaded unless you turn on sync. There are no ads and no tracking.</Part>
+          <Part title="Optional account">Signing in with Google or an email and password identifies you and is needed for sync. We keep only your sign-in details (your email address), handled by Google Firebase Authentication.</Part>
+          <Part title="Optional sync">If you turn on sync, your budget is encrypted on your device with a key that only your sync passphrase or recovery code can open, then stored in Google Firebase. The server holds scrambled data and cannot read it, and the people who run Sprout cannot either. If you forget your passphrase and lose your recovery code, your synced copy cannot be recovered, though the data on your devices is not affected.</Part>
           <Part title="PIN lock">If you set a PIN, your data is encrypted on the device. If you forget the PIN and lose your recovery code, the data cannot be opened, so keep the recovery code safe.</Part>
           <Part title="Backups">Back up from More, then Backup and restore. A backup is a file you keep yourself, and you can protect it with a password. Backups are the only way to move your data to a new phone for now.</Part>
-          <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your sign-in account yourself any time from More, then Account, then Delete account.</Part>
+          <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your synced data, or your whole account, yourself at any time from More, then Sync or Account. Deleting your account also deletes your synced data.</Part>
         </div>
       </Card>
       <p className="text-center text-xs text-slate-400">Built by Hellings</p>
@@ -652,9 +768,10 @@ function AboutSheet({ onClose }) {
   )
 }
 
-function MoreSheet({ lastBackup, user, onPick, onClose }) {
+function MoreSheet({ lastBackup, user, syncOn, onPick, onClose }) {
   const rows = [
     ['cloud', 'Account', user ? user.email : 'Sign in to use Sprout on more devices'],
+    ['sync', 'Sync', syncOn ? 'On: your data is kept up to date on your devices' : 'Keep your data on all your devices, encrypted'],
     ['backup', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
     ['recurring', 'Recurring transactions', 'Rent, salary, regular top-ups'],
     ['cats', 'Categories', 'Add, rename or hide'],
@@ -809,7 +926,7 @@ function RecurSheet({ rules, pockets, onSave, onDelete, onNeedPin, onClose }) {
 }
 
 const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['plan', 'Plan']]
-const ICONS = { cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
+const ICONS = { cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', sync: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
 function Sprout({ onLock }) {
@@ -840,14 +957,17 @@ function Sprout({ onLock }) {
   }, [revealed])
   const [tombs, setTombs] = useStore('budgie.tombs', []) // log of deleted records, kept for syncing
   const gone = c => ids => setTombs(t => [...t, ...ids.map(id => ({ c, id, at: new Date().toISOString() }))].slice(-5000))
-  const [rawPockets, setPockets] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, opening: 0 })), gone('pockets'))
-  const [txs, setTxs] = useStore('budgie.txs', [], gone('txs'))
-  const [budgets, setBudgets] = useStore('budgie.budgets', {})
-  const [rawGoals, setGoals] = useStore('budgie.goals', [], gone('goals'))
-  const [cats, setCats] = useStore('budgie.cats', DEFAULT_CATS, gone('cats'))
-  const [shop, setShop] = useStore('budgie.shop', [], gone('shop'))
-  const [recurring, setRecurring] = useStore('budgie.recurring', [], gone('recurring'))
+  const [rawPockets, setPockets, setPocketsRaw] = useStore('budgie.pockets', ['Cash', 'Bank', 'Airtel Money', 'Mpamba'].map(name => ({ id: uid(), name, opening: 0 })), gone('pockets'))
+  const [txs, setTxs, setTxsRaw] = useStore('budgie.txs', [], gone('txs'))
+  const [budgets, setBudgetsRaw] = useStore('budgie.budgets', {})
+  const [budgetsAt, setBudgetsAt] = useStore('budgie.budgetsAt', '') // when the budgets last changed, so sync can tell which copy is newer
+  const setBudgets = v => { setBudgetsRaw(v); setBudgetsAt(new Date().toISOString()) }
+  const [rawGoals, setGoals, setGoalsRaw] = useStore('budgie.goals', [], gone('goals'))
+  const [cats, setCats, setCatsRaw] = useStore('budgie.cats', DEFAULT_CATS, gone('cats'))
+  const [shop, setShop, setShopRaw] = useStore('budgie.shop', [], gone('shop'))
+  const [recurring, setRecurring, setRecurringRaw] = useStore('budgie.recurring', [], gone('recurring'))
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
+  const [sync, setSync] = useStore('budgie.sync', null) // { uid, key, sat, map, last } while sync is on; saved like the rest of the data
   const [notice, setNotice] = useState('')
   const [user, setUser] = useState(null)
   useEffect(() => watchUser(setUser), [])
@@ -932,6 +1052,13 @@ function Sprout({ onLock }) {
     setSheet(null); setNotice('Backup restored.'); runRec()
   }
   const backupData = { pockets: rawPockets, txs, budgets, goals: rawGoals, cats, shop, recurring, tombs }
+  const syncLocal = { pockets: rawPockets, txs, goals: rawGoals, cats, shop, recurring, budgets, tombs, budgetsUpdatedAt: budgetsAt || (Object.keys(budgets).length ? '1970-01-01T00:00:00.000Z' : '') }
+  const applySync = m => {
+    setPocketsRaw(m.pockets); setTxsRaw(m.txs); setGoalsRaw(m.goals); setCatsRaw(m.cats.length ? m.cats : DEFAULT_CATS); setShopRaw(m.shop)
+    recRef.current = m.recurring; setRecurringRaw(m.recurring); setTombs(m.tombs); setBudgetsRaw(m.budgets); setBudgetsAt(m.budgetsUpdatedAt || '')
+  }
+  const syncer = useSync({ user, sync, setSync, local: syncLocal, apply: applySync })
+  const pristine = !txs.length && !rawGoals.length && !shop.length && !recurring.length && !Object.keys(budgets).length
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <CatCtx.Provider value={catApi}>
@@ -968,9 +1095,10 @@ function Sprout({ onLock }) {
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} onSave={buy} onClose={() => setSheet(null)} />}
-      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
       {sheet === 'about' && <AboutSheet onClose={() => setSheet(null)} />}
-      {sheet === 'cloud' && <CloudSheet user={user} onClose={() => setSheet(null)} />}
+      {sheet === 'cloud' && <CloudSheet user={user} onSync={() => setSheet('sync')} onSignedOut={() => setSync(null)} onClose={() => setSheet(null)} />}
+      {sheet === 'sync' && <SyncSheet user={user} sync={sync} status={syncer.status} pristine={pristine} onEnable={async (key, mode) => syncer.enable({ uid: user.uid, key: await exportSyncKey(key), sat: null, map: {}, last: '' }, mode)} onDisable={() => setSync(null)} onSyncNow={syncer.syncNow} onSignIn={() => setSheet('cloud')} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
       {sheet === 'recurring' && <RecurSheet rules={recurring} pockets={pockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}

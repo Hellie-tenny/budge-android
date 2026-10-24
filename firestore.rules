@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function owner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // The wrapped sync key. Only its owner can read or write it.
+    match /users/{uid}/meta/{doc} {
+      allow read, delete: if owner(uid);
+      allow create, update: if owner(uid)
+        && doc == 'sync'
+        && request.resource.data.keys().hasOnly(['v', 'pass', 'rec']);
+    }
+
+    // One encrypted record (or a deletion note) per document. The document name must match its contents.
+    match /users/{uid}/records/{rid} {
+      allow read, delete: if owner(uid);
+      allow create, update: if owner(uid)
+        && request.resource.data.keys().hasOnly(['c', 'id', 'u', 'iv', 'ct', 'del', 'sat'])
+        && request.resource.data.keys().hasAll(['c', 'id', 'u', 'sat'])
+        && request.resource.data.c is string
+        && request.resource.data.id is string
+        && request.resource.data.u is string
+        && rid == request.resource.data.c + '_' + request.resource.data.id
+        && request.resource.data.sat == request.time
+        && request.resource.data.get('del', true) == true
+        && request.resource.data.get('ct', '') is string
+        && request.resource.data.get('ct', '').size() < 200000;
+    }
+  }
+}

@@ -116,3 +116,8 @@ export async function openAll(key, envelopes) {
   }
   return { data, bad }
 }
+
+// The sync key as text, so a signed-in device can keep it between app starts (it is saved with the rest of the
+// app's data, so the PIN lock protects it the same way).
+export const exportSyncKey = async key => b64(await crypto.subtle.exportKey('raw', key))
+export const importSyncKey = s => importKey(unb64(s))

@@ -10,7 +10,7 @@ import {
 } from 'firebase/auth'
 import { isNative } from './native.js'
 
-const app = initializeApp({
+export const app = initializeApp({
   apiKey: 'AIzaSyCLkDloV6R2FzYk7HSymgbLiWshkn5KrGY',
   authDomain: 'sprout-ledger.firebaseapp.com',
   projectId: 'sprout-ledger',
@@ -51,7 +51,7 @@ export async function signOutUser() {
 }
 // Permanently deletes the signed-in account. Firebase wants a recent sign-in for this, so the person proves it is them
 // again first (password, or the Google account picker). Data on this device is not touched.
-export async function deleteAccount(password) {
+export async function deleteAccount(password, beforeDelete) {
   const u = auth.currentUser
   if (!u) return
   if (u.providerData.some(p => p.providerId === 'password')) {
@@ -62,6 +62,7 @@ export async function deleteAccount(password) {
     if (!r.credential?.idToken) throw new Error('Google did not return an ID token.')
     await reauthenticateWithCredential(u, GoogleAuthProvider.credential(r.credential.idToken))
   } else await reauthenticateWithPopup(u, new GoogleAuthProvider())
+  if (beforeDelete) await beforeDelete(u.uid) // e.g. erase this person's synced data while still signed in
   await deleteUser(u)
   if (isNative()) { try { const { FirebaseAuthentication } = await nativePlugin(); await FirebaseAuthentication.signOut() } catch { /* nothing signed in natively */ } }
 }
