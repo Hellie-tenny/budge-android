@@ -634,6 +634,7 @@ function BuySheet({ item, pockets, onSave, onClose }) {
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
 const APP_VERSION = '1.0.0'
+const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
   <div className="rounded-2xl bg-paper p-4 text-center">
@@ -764,7 +765,7 @@ function AboutSheet({ onClose }) {
           <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your synced data, or your whole account, yourself at any time from More, then Sync or Account. Deleting your account also deletes your synced data.</Part>
         </div>
       </Card>
-      {!isNative() && <a href="/downloads/sprout.apk" download="sprout.apk" className="block w-full rounded-2xl bg-azure py-3 text-center font-semibold text-white">Download the Android app</a>}
+      {!isNative() && <a href={APK_URL} className="block w-full rounded-2xl bg-azure py-3 text-center font-semibold text-white">Download the Android app</a>}
       <p className="text-center text-xs text-slate-400">Built by Hellings</p>
     </Sheet>
   )

@@ -6,6 +6,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # lets the workflow publish the APK as a release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -72,15 +74,18 @@ jobs:
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           APKSIGNER="$(ls -d "$SDK"/build-tools/*/ | sort -V | tail -1)apksigner"
           "$APKSIGNER" verify --print-certs android/app/build/outputs/apk/debug/app-debug.apk | grep "SHA-1"
-      # Put the APK and the update file on the website, then publish it. Runs only on main.
-      - name: Add the APK and update file to the website
+      # Publish the APK as a GitHub release, then put the update file on the website. Runs only on main.
+      - name: Publish the APK as a GitHub release
         if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(grep -oP "APP_VERSION = '\K[^']+" src/App.jsx)
           test -n "$VERSION" || { echo "Could not read APP_VERSION from src/App.jsx"; exit 1; }
-          mkdir -p dist/downloads
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/downloads/sprout.apk
-          jq -n --arg v "$VERSION" --arg u "https://sprout-ledger.web.app/downloads/sprout.apk" --arg n "$(git log -1 --pretty=%s)" \
+          cp android/app/build/outputs/apk/debug/app-debug.apk sprout.apk
+          gh release delete "v$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create "v$VERSION" sprout.apk --repo "$GITHUB_REPOSITORY" --title "Sprout $VERSION" --notes "$(git log -1 --pretty=%s)" --latest
+          jq -n --arg v "$VERSION" --arg u "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/sprout.apk" --arg n "$(git log -1 --pretty=%s)" \
             '{version:$v,url:$u,notes:$n}' > dist/version.json
           cat dist/version.json
       - name: Publish the website
