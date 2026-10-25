@@ -512,14 +512,14 @@ function SecuritySheet({ onClose, onChange }) {
   )
 }
 
-function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, onBuy, onUnbuy }) {
+function Plan({ shop, setShop, goals, setGoals, budgets, txs, pockets, onFund, onBuy, onUnbuy, onBuyAll }) {
   const [seg, setSeg] = useState('shop')
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-1 rounded-2xl bg-surface p-1 lg:max-w-xs">
         {[['shop', 'Shopping'], ['goals', 'Goals']].map(([k, l]) => <button key={k} onClick={() => setSeg(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (seg === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
       </div>
-      {seg === 'shop' ? <Shopping shop={shop} setShop={setShop} txs={txs} onBuy={onBuy} onUnbuy={onUnbuy} /> : <Goals goals={goals} setGoals={setGoals} onFund={onFund} />}
+      {seg === 'shop' ? <Shopping shop={shop} setShop={setShop} txs={txs} onBuy={onBuy} onUnbuy={onUnbuy} onBuyAll={onBuyAll} /> : <Goals goals={goals} setGoals={setGoals} onFund={onFund} />}
     </div>
   )
 }
@@ -539,37 +539,32 @@ function PlanSheet({ plan, onSave, onDelete, onClose }) {
   const [name, setName] = useState(plan?.name || ''), [date, setDate] = useState(plan?.date || ymd(new Date())), [funds, setFunds] = useState(plan?.funds ? String(plan.funds) : '')
   return (
     <Sheet onClose={onClose}>
-      <h3 className="text-center font-semibold">{plan ? 'Edit plan' : 'New plan'}</h3>
-      <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Plan name, e.g. Market day" className={field} />
+      <h3 className="text-center font-semibold">{plan ? 'Edit list' : 'New list'}</h3>
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="List name, e.g. Market day" className={field} />
       <label className="block text-xs text-slate-500">Date of this shopping<input type="date" value={date} onChange={e => setDate(e.target.value)} className={field + ' mt-1 text-base text-ink'} /></label>
       <p className="text-xs text-slate-500">Items you buy with tracked money are recorded on this date. Pick an earlier day to log shopping you already did.</p>
       <input value={funds} type="number" inputMode="decimal" onChange={e => setFunds(e.target.value)} placeholder="Money to spend (optional)" aria-label="Money to spend" className={field} />
       <p className="text-xs text-slate-500">Money you were given, or your own money that this app doesn't track.</p>
-      <Save off={!name.trim() || !date} onClick={() => onSave({ id: plan?.id || uid(), kind: 'plan', name: name.trim(), date, funds: Math.max(0, Number(funds) || 0) })}>Save plan</Save>
-      {plan && <button onClick={onDelete} className="w-full py-2 text-sm font-semibold text-down">Delete this plan</button>}
+      <Save off={!name.trim() || !date} onClick={() => onSave({ id: plan?.id || uid(), kind: 'plan', name: name.trim(), date, funds: Math.max(0, Number(funds) || 0) })}>Save list</Save>
+      {plan && <button onClick={onDelete} className="w-full py-2 text-sm font-semibold text-down">Delete this list</button>}
     </Sheet>
   )
 }
 
-function Shopping({ shop, setShop, txs, onBuy, onUnbuy }) {
-  const [name, setName] = useState(''), [est, setEst] = useState(''), [sel, setSel] = useState(null), [planSheet, setPlanSheet] = useState(null)
-  const planRecs = shop.filter(i => i.kind === 'plan'), legacyFund = shop.find(i => i.fund)
-  const needsMain = !planRecs.some(p => p.id === MAIN) && (planRecs.length === 0 || shop.some(i => isItem(i) && planOf(i) === MAIN))
-  const plans = [...(needsMain ? [{ id: MAIN, kind: 'plan', name: 'Shopping', date: '', funds: legacyFund?.amount || 0 }] : []), ...planRecs]
-  const cur = plans.find(p => p.id === sel) || plans[0]
-  const items = shop.filter(i => isItem(i) && planOf(i) === cur.id), todo = items.filter(i => !i.done), bought = items.filter(i => i.done)
+const foldState = {} // which lists are open or folded; kept while the app is open
+
+// One shopping list as a foldable card: its items, its own "add item" row, and the buttons to mark things bought.
+function ListCard({ plan, items, txs, onAdd, onBuy, onUnbuy, onBuyAll, onRemove, onClear, onEdit }) {
+  const [name, setName] = useState(''), [est, setEst] = useState(''), [, redraw] = useState(0)
+  const todo = items.filter(i => !i.done), bought = items.filter(i => i.done)
+  const open = foldState[plan.id] ?? (items.length === 0 || todo.length > 0) // a finished list folds itself away
+  const toggle = () => { foldState[plan.id] = !open; redraw(n => n + 1) }
   const paid = i => (i.txId ? txs.find(t => t.id === i.txId)?.amount ?? i.paid ?? i.est : i.paid ?? i.est)
   const planned = todo.reduce((a, i) => a + i.est, 0), spent = bought.reduce((a, i) => a + paid(i), 0)
   const otherSpent = bought.filter(i => !i.txId).reduce((a, i) => a + paid(i), 0), trackedSpent = spent - otherSpent
-  const funds = cur.funds || 0, left = funds - otherSpent, afterPlanned = left - planned
-  const withMain = list => (cur.id === MAIN ? ensureMain(list) : list)
-  const add = () => { if (!name.trim()) return; setShop(list => [...withMain(list), { id: uid(), name: name.trim(), est: Number(est) || 0, planId: cur.id, done: false }]); setName(''); setEst('') }
-  const savePlan = p => { setShop(list => { const base = p.id === MAIN ? ensureMain(list) : list; return base.some(x => x.id === p.id) ? base.map(x => (x.id === p.id ? { ...x, ...p } : x)) : [...base, p] }); setSel(p.id); setPlanSheet(null) }
-  const deletePlan = () => {
-    if (!confirm(`Delete "${cur.name}" and its ${items.length} item(s)? Purchases already recorded in your accounts stay.`)) return
-    setShop(list => list.filter(i => i.id !== cur.id && (i.fund ? cur.id !== MAIN : i.kind === 'plan' || planOf(i) !== cur.id))); setSel(null); setPlanSheet(null)
-  }
-  const clearBought = () => setShop(list => list.filter(i => !(isItem(i) && planOf(i) === cur.id && i.done)))
+  const funds = plan.funds || 0, left = funds - otherSpent, afterPlanned = left - planned
+  const add = () => { if (!name.trim()) return; onAdd(plan, name.trim(), Number(est) || 0); setName(''); setEst('') }
+  const sub = [plan.date && niceDate(plan.date), items.length ? `${bought.length} of ${items.length} bought` : 'No items yet'].filter(Boolean).join(' · ')
   const row = i => (
     <div key={i.id} className="flex items-center gap-3 py-2.5">
       <button aria-label={i.done ? 'Undo purchase' : 'Mark as bought'} onClick={() => (i.done ? onUnbuy(i) : onBuy(i))} className={'grid h-7 w-7 shrink-0 place-items-center rounded-full border-2 text-sm ' + (i.done ? 'border-up bg-up text-white' : 'border-azure')}>{i.done && '✓'}</button>
@@ -578,49 +573,67 @@ function Shopping({ shop, setShop, txs, onBuy, onUnbuy }) {
         {i.done && <p className="truncate text-xs text-slate-500">{i.txId ? 'Tracked money' : 'Other money'}</p>}
       </div>
       <p className="text-sm font-semibold">{i.done ? mk(paid(i)) : i.est ? mk(i.est) : ''}</p>
-      <button aria-label="Remove item" onClick={() => setShop(list => list.filter(x => x.id !== i.id))} className="px-1 text-slate-400">✕</button>
+      <button aria-label="Remove item" onClick={() => onRemove(i)} className="px-1 text-slate-400">✕</button>
     </div>
   )
   return (
+    <Card>
+      <div className="flex items-center gap-2">
+        <button onClick={toggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+          <svg viewBox="0 0 24 24" className={'h-5 w-5 shrink-0 text-slate-400 transition-transform ' + (open ? 'rotate-90' : '')} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+          <span className="min-w-0 flex-1"><span className="block truncate font-semibold">{plan.name}</span><span className="block truncate text-xs text-slate-500">{sub}</span></span>
+          <span className="text-sm font-semibold">{planned > 0 ? mk(planned) : items.length && !todo.length ? '✓' : ''}</span>
+        </button>
+        <button onClick={onEdit} aria-label={'Edit ' + plan.name} className="px-1 text-sm font-semibold text-azure">Edit</button>
+      </div>
+      {open && <div className="mt-3 space-y-3">
+        {todo.length > 0 && <div className="divide-y divide-black/5 dark:divide-white/5">{todo.map(row)}</div>}
+        {bought.length > 0 && <div>
+          <div className="flex items-center justify-between"><p className="text-xs font-semibold text-slate-500">Bought</p><button onClick={() => onClear(plan)} className="text-xs font-semibold text-azure">Clear bought</button></div>
+          <div className="divide-y divide-black/5 dark:divide-white/5">{bought.map(row)}</div>
+        </div>}
+        <div className="flex gap-2">
+          <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Add an item, e.g. Maize flour" aria-label={'Add an item to ' + plan.name} className={field + ' min-w-0 flex-1 py-2!'} />
+          <input value={est} type="number" inputMode="numeric" onChange={e => setEst(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Price" aria-label="Price" className={field + ' w-24! py-2!'} />
+          <button onClick={add} className="rounded-2xl bg-azure px-4 font-semibold text-white">Add</button>
+        </div>
+        {(items.length > 0 || funds > 0) && <div className="space-y-1 border-t border-black/5 pt-3 text-sm dark:border-white/5">
+          {funds > 0 && <div className="flex justify-between"><span className="text-slate-500">Money to spend</span><span className="font-semibold">{mk(funds)}</span></div>}
+          <div className="flex justify-between"><span className="text-slate-500">Still to buy</span><span className="font-semibold">{mk(planned)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Spent so far</span><span className="font-semibold">{mk(spent)}</span></div>
+          {trackedSpent > 0 && <p className="text-xs text-slate-500">{mk(trackedSpent)} of that came off your accounts.</p>}
+          {funds > 0 && <div className="flex justify-between"><span className="text-slate-500">{left < 0 ? 'Over by' : 'Left'}</span><span className={'font-semibold ' + (left < 0 ? 'text-down' : '')}>{mk(Math.abs(left))}</span></div>}
+          {funds > 0 && planned > 0 && <p className={afterPlanned < 0 ? 'text-down' : 'text-slate-500'}>{afterPlanned < 0 ? `${mk(-afterPlanned)} short for the items still to buy` : `${mk(afterPlanned)} left after the items still to buy`}</p>}
+        </div>}
+        {todo.some(i => i.est > 0) && <button onClick={() => onBuyAll(plan, todo)} className="w-full rounded-2xl bg-azure/10 py-3 font-semibold text-azure">Mark the whole list as bought</button>}
+      </div>}
+    </Card>
+  )
+}
+
+function Shopping({ shop, setShop, txs, onBuy, onUnbuy, onBuyAll }) {
+  const [planSheet, setPlanSheet] = useState(null) // 'new', or the list being edited
+  const planRecs = shop.filter(i => i.kind === 'plan'), legacyFund = shop.find(i => i.fund)
+  const needsMain = !planRecs.some(p => p.id === MAIN) && (planRecs.length === 0 || shop.some(i => isItem(i) && planOf(i) === MAIN))
+  const plans = [...(needsMain ? [{ id: MAIN, kind: 'plan', name: 'Shopping', date: '', funds: legacyFund?.amount || 0 }] : []), ...planRecs]
+  const addItem = (plan, name, est) => setShop(list => [...(plan.id === MAIN ? ensureMain(list) : list), { id: uid(), name, est, planId: plan.id, done: false }])
+  const savePlan = p => { setShop(list => { const base = needsMain ? ensureMain(list) : list; return base.some(x => x.id === p.id) ? base.map(x => (x.id === p.id ? { ...x, ...p } : x)) : [...base, p] }); setPlanSheet(null) }
+  const deletePlan = plan => {
+    const n = shop.filter(i => isItem(i) && planOf(i) === plan.id).length
+    if (!confirm(`Delete "${plan.name}" and its ${n} item(s)? Purchases already recorded in your accounts stay.`)) return
+    setShop(list => list.filter(i => i.id !== plan.id && (i.fund ? plan.id !== MAIN : i.kind === 'plan' || planOf(i) !== plan.id))); setPlanSheet(null)
+  }
+  return (
     <div className="space-y-3">
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-        {plans.map(p => <button key={p.id} onClick={() => setSel(p.id)} className={'shrink-0 rounded-full px-4 py-2 text-sm font-semibold ' + (p.id === cur.id ? 'bg-azure text-white' : 'bg-surface text-slate-500')}>{p.name}</button>)}
-        <button onClick={() => setPlanSheet('new')} className="shrink-0 rounded-full border border-dashed border-azure px-4 py-2 text-sm font-semibold text-azure">+ New plan</button>
+      <div className="flex items-center justify-between px-1">
+        <p className="text-sm font-semibold text-slate-500">{plans.length === 1 ? '1 list' : plans.length + ' lists'}</p>
+        <button onClick={() => setPlanSheet('new')} className="rounded-full border border-dashed border-azure px-4 py-2 text-sm font-semibold text-azure">+ New list</button>
       </div>
-      <div className="space-y-3 lg:grid lg:grid-cols-5 lg:items-start lg:gap-5 lg:space-y-0">
-        <div className="space-y-3 lg:col-span-2">
-          <Card>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><p className="truncate font-semibold">{cur.name}</p><p className="text-xs text-slate-500">{cur.date ? niceDate(cur.date) : 'No date set'}</p></div>
-              <button onClick={() => setPlanSheet('edit')} className="text-sm font-semibold text-azure">Edit</button>
-            </div>
-            <div className="mt-3 space-y-1 text-sm">
-              {funds > 0 && <div className="flex justify-between"><span className="text-slate-500">Money to spend</span><span className="font-semibold">{mk(funds)}</span></div>}
-              <div className="flex justify-between"><span className="text-slate-500">Planned</span><span className="font-semibold">{mk(planned)}</span></div>
-              <div className="flex justify-between"><span className="text-slate-500">Spent so far</span><span className="font-semibold">{mk(spent)}</span></div>
-              {trackedSpent > 0 && <p className="text-xs text-slate-500">{mk(trackedSpent)} of that came off your accounts.</p>}
-              {funds > 0 && <div className="flex justify-between"><span className="text-slate-500">{left < 0 ? 'Over by' : 'Left'}</span><span className={'font-semibold ' + (left < 0 ? 'text-down' : '')}>{mk(Math.abs(left))}</span></div>}
-              {funds > 0 && planned > 0 && <p className={afterPlanned < 0 ? 'text-down' : 'text-slate-500'}>{afterPlanned < 0 ? `${mk(-afterPlanned)} short for the items still planned` : `${mk(afterPlanned)} left after the items still planned`}</p>}
-            </div>
-          </Card>
-          <Card>
-            <div className="flex gap-2">
-              <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="Item, e.g. Maize flour" className={field + ' min-w-0 flex-1 py-2!'} />
-              <input value={est} type="number" inputMode="numeric" onChange={e => setEst(e.target.value)} placeholder="Price" className={field + ' w-24! py-2!'} />
-              <button onClick={add} className="rounded-2xl bg-azure px-4 font-semibold text-white">Add</button>
-            </div>
-          </Card>
-        </div>
-        <div className="space-y-3 lg:col-span-3">
-          {items.length === 0 && <p className="mt-6 text-center text-slate-500">Add what you're going to buy. Tick items as you buy them, and choose whether you paid with tracked money or other money.</p>}
-          {todo.length > 0 && <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{todo.map(row)}</Card>}
-          {bought.length > 0 && <>
-            <div className="flex items-center justify-between px-1"><p className="text-sm font-semibold text-slate-500">Bought</p><button onClick={clearBought} className="text-sm font-semibold text-azure">Clear bought</button></div>
-            <Card className="divide-y divide-black/5 py-1 dark:divide-white/5">{bought.map(row)}</Card>
-          </>}
-        </div>
+      <div className="space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
+        {plans.map(p => <ListCard key={p.id} plan={p} txs={txs} items={shop.filter(i => isItem(i) && planOf(i) === p.id)} onAdd={addItem} onBuy={onBuy} onUnbuy={onUnbuy} onBuyAll={onBuyAll}
+          onRemove={i => setShop(list => list.filter(x => x.id !== i.id))} onClear={plan => setShop(list => list.filter(i => !(isItem(i) && planOf(i) === plan.id && i.done)))} onEdit={() => setPlanSheet(p)} />)}
       </div>
-      {planSheet && <PlanSheet plan={planSheet === 'edit' ? cur : null} onSave={savePlan} onDelete={deletePlan} onClose={() => setPlanSheet(null)} />}
+      {planSheet && <PlanSheet plan={planSheet === 'new' ? null : planSheet} onSave={savePlan} onDelete={() => deletePlan(planSheet)} onClose={() => setPlanSheet(null)} />}
     </div>
   )
 }
@@ -651,9 +664,37 @@ function BuySheet({ item, pockets, date, onSave, onClose }) {
   )
 }
 
+// Marks every priced item still to buy on a list as bought in one go, all with the same money type.
+function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
+  const { active } = useCats()
+  const cats = active('out'), [tracked, setTracked] = useState(false), [pocket, setPocket] = useState(pockets[0].name)
+  const [cat, setCat] = useState((cats.find(c => c.id === 'Shopping') || cats[0])?.id || 'Other')
+  const priced = items.filter(i => i.est > 0), skipped = items.length - priced.length, total = priced.reduce((a, i) => a + i.est, 0)
+  const today = ymd(new Date()), day = plan.date && plan.date < today ? plan.date : today
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">Mark "{plan.name}" as bought?</h3>
+      <p className="text-center text-sm text-slate-500">{priced.length} item(s) · {mk(total)} in total, at the prices on the list</p>
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-paper p-1">
+        {[[false, 'Other money'], [true, 'Tracked money']].map(([v, l]) => <button key={l} onClick={() => setTracked(v)} className={'rounded-xl py-2 text-sm font-semibold ' + (tracked === v ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}
+      </div>
+      {tracked
+        ? <>
+          <p className="text-center text-xs text-slate-500">Each item is recorded as its own expense on {niceDate(day)}, and comes off your balance.</p>
+          <Pick label="Paid from" value={pocket} onChange={setPocket} pockets={pockets} />
+          <label className="block text-xs text-slate-500">Category<select value={cat} onChange={e => setCat(e.target.value)} className={field + ' mt-1 text-base text-ink'}>{cats.map(c => <option key={c.id} value={c.id}>{c.emoji || EMO[c.id] || ''} {c.name}</option>)}</select></label>
+        </>
+        : <p className="text-center text-xs text-slate-500">Not counted in your balances, budgets or activity.</p>}
+      {skipped > 0 && <p className="text-center text-xs text-slate-500">{skipped} item(s) have no price and will stay on the list. Add a price to include them.</p>}
+      <p className="text-center text-xs text-slate-500">To change one price, tick that item on its own instead.</p>
+      <Save off={!priced.length} onClick={() => onSave({ items: priced, tracked, pocket, category: cat, date: day })}>{tracked ? `Save ${priced.length} purchase(s)` : `Mark ${priced.length} as bought`}</Save>
+    </Sheet>
+  )
+}
+
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.0'
+const APP_VERSION = '1.0.1'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1026,6 +1067,16 @@ function Sprout({ onLock }) {
     if (t.other) { setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, paid: t.amount } : i)); setSheet(null); return } // other money: nothing is recorded in the accounts
     save(t); setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, txId: t.id } : i))
   }
+  const buyAll = ({ items, tracked, pocket, category, date }) => {
+    const ids = new Set(items.map(i => i.id))
+    if (!tracked) setShop(list => list.map(i => ids.has(i.id) ? { ...i, done: true, paid: i.est } : i)) // other money: nothing is recorded in the accounts
+    else {
+      const made = items.map(i => ({ id: uid(), type: 'out', amount: i.est, pocket, category, note: i.name, shopId: i.id, date: toISO(date) }))
+      setTxs(x => [...made, ...x])
+      setShop(list => list.map(i => { const t = made.find(y => y.shopId === i.id); return t ? { ...i, done: true, txId: t.id } : i }))
+    }
+    setSheet(null)
+  }
   const unbuy = i => {
     const t = i.txId ? txs.find(x => x.id === i.txId) : null
     if (!confirm(t ? `Undo this purchase? The ${mk(t.amount)} expense will be removed and the money returned to ${t.pocket}.` : 'Mark this item as not bought?')) return
@@ -1105,7 +1156,7 @@ function Sprout({ onLock }) {
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
         {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
-        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} />}
+        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
       </main>
       </div>
@@ -1117,6 +1168,7 @@ function Sprout({ onLock }) {
       </nav>
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet?.buyAll && <BuyListSheet plan={sheet.buyAll.plan} items={sheet.buyAll.items} pockets={pockets} onSave={buyAll} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} date={shop.find(p => p.kind === 'plan' && p.id === (sheet.buy.planId || 'plan-main'))?.date} onSave={buy} onClose={() => setSheet(null)} />}
       {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
       {sheet === 'about' && <AboutSheet onClose={() => setSheet(null)} />}
