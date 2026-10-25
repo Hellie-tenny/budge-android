@@ -81,7 +81,7 @@ const Chip = ({ id, color }) => {
   const c = useCats().get(id), col = color || c.color
   return (
     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl" style={{ background: col + '26', color: col }}>
-      {c.emoji ? <span className="text-xl leading-none">{c.emoji}</span> : CI[c.id] ? <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={CI[c.id]} /></svg> : <b>{c.name[0]?.toUpperCase()}</b>}
+      {c.emoji ? <span className="text-xl leading-none">{c.emoji}</span> : CI[c.id] ? <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={CI[c.id]} /></svg> : <b>{c.name?.[0]?.toUpperCase()}</b>}
     </span>
   )
 }
@@ -296,7 +296,7 @@ const Pick = ({ value, onChange, pockets, label }) => <label className="block te
 function AddSheet({ pockets, txs, edit, onSave, onNewCat, onClose }) {
   const { pick, get } = useCats()
   const [type, setType] = useState(edit?.type || 'out'), [amount, setAmount] = useState(edit ? String(edit.amount) : ''), [pocket, setPocket] = useState(edit?.pocket || pockets[0].name), [to, setTo] = useState(edit?.to || (pockets[1] || pockets[0]).name)
-  const [category, setCategory] = useState(() => (edit && edit.type !== 'tr' ? edit.category : pick('out')[0]?.id || 'Other')), [note, setNote] = useState(edit?.note || ''), [adding, setAdding] = useState(false), [day, setDay] = useState(ymd(edit?.date || new Date()))
+  const [category, setCategory] = useState(() => ((edit && edit.type !== 'tr' && edit.category) || pick('out')[0]?.id || 'Other')), [note, setNote] = useState(edit?.note || ''), [adding, setAdding] = useState(false), [day, setDay] = useState(ymd(edit?.date || new Date()))
   const today = ymd(new Date())
   const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to) || !day || day > today
   const save = () => onSave({ ...(edit || {}), id: edit?.id || uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: toISO(day, edit?.date) })
@@ -616,7 +616,7 @@ function Shopping({ shop, setShop, txs, onBuy, onUnbuy, onBuyAll }) {
   const planRecs = shop.filter(i => i.kind === 'plan'), legacyFund = shop.find(i => i.fund)
   const needsMain = !planRecs.some(p => p.id === MAIN) && (planRecs.length === 0 || shop.some(i => isItem(i) && planOf(i) === MAIN))
   const plans = [...(needsMain ? [{ id: MAIN, kind: 'plan', name: 'Shopping', date: '', funds: legacyFund?.amount || 0 }] : []), ...planRecs]
-  const addItem = (plan, name, est) => setShop(list => [...(plan.id === MAIN ? ensureMain(list) : list), { id: uid(), name, est, planId: plan.id, done: false }])
+  const addItem = (plan, name, est) => setShop(list => [...(plan.id === MAIN ? ensureMain(list) : list), { id: uid(), name, est, planId: plan.id, category: 'Shopping', done: false }])
   const savePlan = p => { setShop(list => { const base = needsMain ? ensureMain(list) : list; return base.some(x => x.id === p.id) ? base.map(x => (x.id === p.id ? { ...x, ...p } : x)) : [...base, p] }); setPlanSheet(null) }
   const deletePlan = plan => {
     const n = shop.filter(i => isItem(i) && planOf(i) === plan.id).length
@@ -694,7 +694,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.1'
+const APP_VERSION = '1.0.2'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1050,7 +1050,7 @@ function Sprout({ onLock }) {
   txs.forEach(t => { uses[t.category] = (uses[t.category] || 0) + 1 })
   const byId = new Map(cats.map(c => [c.id, c]))
   const active = kind => cats.filter(c => !c.archived && (c.kind === kind || c.kind === 'both'))
-  const catApi = { list: cats, active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id, name: id, color: '#868e96' } }
+  const catApi = { list: cats, active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id: id || 'Other', name: id || 'Other', color: '#868e96' } }
   const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date)) // newest first, even when backdated
   const addCat = c => setCats(cs => [...cs, c])
   const editCat = c => setCats(cs => cs.map(x => x.id === c.id ? c : x))
