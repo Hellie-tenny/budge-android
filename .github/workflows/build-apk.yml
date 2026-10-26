@@ -22,7 +22,7 @@ jobs:
       - run: npx cap add android
       - run: npx cap sync android
       - name: Use the Sprout app icon and splash screen
-        run: cp -r branding/android/res/. android/app/src/main/res/
+        run: cp -r branding/res/. android/app/src/main/res/
 
       # Google sign-in setup for the generated android/ project
       - name: Add google-services.json
