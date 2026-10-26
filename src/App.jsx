@@ -3,6 +3,7 @@ import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, 
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
+import Logo from './Logo.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
 import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
@@ -694,7 +695,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.2'
+const APP_VERSION = '1.0.3'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -812,6 +813,7 @@ function AboutSheet({ onClose }) {
   return (
     <Sheet onClose={onClose}>
       <div className="text-center">
+        <Logo size={72} className="mx-auto mb-2" />
         <p className="text-2xl font-bold text-navy">Sprout</p>
         <p className="text-xs text-slate-500">Version {APP_VERSION}</p>
       </div>
@@ -1162,7 +1164,7 @@ function Sprout({ onLock }) {
       </div>
       <button onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5 lg:static lg:order-first lg:mx-0 lg:w-64 lg:max-w-none lg:shrink-0 lg:flex-col lg:justify-start lg:gap-1 lg:overflow-y-auto lg:border-r lg:border-t-0 lg:px-4 lg:py-8 lg:backdrop-blur-none">
-        <p className="hidden px-4 pb-6 text-2xl font-bold text-navy lg:block">Sprout</p>
+        <div className="hidden items-center gap-2 px-4 pb-6 lg:flex"><Logo size={36} /><p className="text-2xl font-bold text-navy">Sprout</p></div>
         {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
         <button onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
       </nav>

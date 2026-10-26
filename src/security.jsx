@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import Logo from './Logo.jsx'
 
 export const PIN_LEN = 4              // 6 makes offline guessing far harder
 export const LOCK_AFTER_MS = 30000    // lock after being away this long (0 = immediately)
@@ -195,6 +196,7 @@ export function LockScreen({ onUnlock }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-paper px-6">
       <div className="w-full max-w-xs">
+        <Logo size={84} className="mx-auto mb-3" />
         <p className="mb-8 text-center text-3xl font-bold text-navy">Sprout</p>
         {mode === 'pin' && <>
           <PinCheck open hint="to open the app" onOk={onUnlock} />
