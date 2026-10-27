@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
 import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
@@ -135,7 +135,7 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
   const now = new Date(), left = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() - now.getDate() + 1
   return (
     <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
-      <section className="pt-1 lg:order-1 lg:col-span-2">
+      <section data-tour="balance" className="pt-1 lg:order-1 lg:col-span-2">
         <p className="text-sm text-slate-500">Total balance</p>
         <p className="text-5xl font-bold leading-tight tracking-tight">{mk(total)}</p>
         <p className="mt-1 text-sm text-slate-500"><span className="font-semibold text-up">+{mk(inc)}</span> in · <span className="font-semibold">-{mk(out)}</span> out this month</p>
@@ -695,7 +695,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.3'
+const APP_VERSION = '1.0.4'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -808,7 +808,7 @@ function SyncSheet({ user, sync, status, pristine, onEnable, onDisable, onSyncNo
   )
 }
 
-function AboutSheet({ onClose }) {
+function AboutSheet({ onTour, onClose }) {
   const Part = ({ title, children }) => <div><p className="text-sm font-semibold">{title}</p><p className="text-sm text-slate-500">{children}</p></div>
   return (
     <Sheet onClose={onClose}>
@@ -828,6 +828,7 @@ function AboutSheet({ onClose }) {
           <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your synced data, or your whole account, yourself at any time from More, then Sync or Account. Deleting your account also deletes your synced data.</Part>
         </div>
       </Card>
+      <button onClick={onTour} className="w-full rounded-2xl bg-paper py-3 font-semibold text-azure">Replay the tour</button>
       {!isNative() && <a href={APK_URL} className="block w-full rounded-2xl bg-azure py-3 text-center font-semibold text-white">Download the Android app</a>}
       <p className="text-center text-xs text-slate-400">Built by Hellings</p>
     </Sheet>
@@ -991,6 +992,67 @@ function RecurSheet({ rules, pockets, onSave, onDelete, onNeedPin, onClose }) {
   )
 }
 
+// First-time tour: dims the screen and points at the real icons, one step at a time.
+const TOUR_KEY = 'sprout.tour' // plain localStorage flag, same on every device, nothing private in it
+const tourSeen = () => { try { return !!localStorage.getItem(TOUR_KEY) } catch { return true } }
+const tourDone = () => { try { localStorage.setItem(TOUR_KEY, '1') } catch { /* private mode: the tour may show again, harmless */ } }
+const TOUR = [
+  { title: 'Welcome to Sprout', text: 'A quick tour of what everything does. It takes about a minute, and you can skip it at any time.', tab: 'home' },
+  { target: 'balance', tab: 'home', title: 'Your money at a glance', text: 'Your total balance across all accounts, and how much came in and went out this month. Your accounts are listed underneath.' },
+  { target: 'add', title: 'Add a transaction', text: 'Tap + whenever you spend or receive money. Choose the account, the category and the amount.' },
+  { target: 'tab-activity', tab: 'activity', title: 'Activity', text: 'Every transaction in one list, newest first. Tap one to edit it, or delete it if it was a mistake.' },
+  { target: 'tab-insights', tab: 'insights', title: 'Insights', text: 'Charts that show where your money goes, month by month.' },
+  { target: 'tab-budgets', tab: 'budgets', title: 'Budgets', text: 'Set a monthly limit for each category. Sprout warns you when you go over.' },
+  { target: 'tab-plan', tab: 'plan', title: 'Plan', text: 'Save towards goals, and make shopping lists with a date and money to spend. Tick items as you buy them.' },
+  { target: 'lock', tab: 'home', title: 'App lock', text: 'Set a PIN to keep your money private. It also encrypts your data on this device.' },
+  { target: 'more', title: 'More', text: 'Account, sync between devices, backups, recurring transactions, categories, and About.' },
+  { title: "You're all set", text: 'To see this tour again, open More, then About Sprout, and tap Replay the tour.' },
+]
+
+function Tour({ onTab, onDone }) {
+  const [i, setI] = useState(0), [box, setBox] = useState(null)
+  const step = TOUR[i], last = i === TOUR.length - 1
+  useEffect(() => { if (step.tab) onTab(step.tab) }, [i]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const measure = () => {
+      // the same step can match two elements (phone button and desktop button): use the one that is on screen
+      const el = step.target && [...document.querySelectorAll(`[data-tour="${step.target}"]`)].find(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
+      if (!el) { setBox(null); return }
+      const r = el.getBoundingClientRect()
+      setBox({ x: r.left, y: r.top, w: r.width, h: r.height })
+    }
+    setBox(null)
+    const t = setTimeout(measure, 80) // let the tab behind change first
+    window.addEventListener('resize', measure)
+    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
+  }, [i]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onDone() }
+    window.addEventListener('keydown', k)
+    return () => window.removeEventListener('keydown', k)
+  }, [onDone])
+  const pad = 6, below = box && box.y + box.h / 2 > window.innerHeight / 2 // target in the lower half: put the card at the top
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Sprout tour" className="fixed inset-0 z-50">
+      <div className="absolute inset-0" />
+      {box
+        ? <div className="pointer-events-none absolute rounded-2xl ring-2 ring-white transition-all duration-200" style={{ left: box.x - pad, top: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2, boxShadow: '0 0 0 9999px rgba(0,0,0,.65)' }} />
+        : <div className="absolute inset-0 bg-black/65" />}
+      <div className={'absolute inset-x-0 mx-auto w-[calc(100%-2rem)] max-w-sm rounded-3xl bg-surface p-5 shadow-2xl ' + (!box ? 'top-1/2 -translate-y-1/2' : below ? 'top-[calc(1rem+env(safe-area-inset-top))]' : 'bottom-[calc(1rem+env(safe-area-inset-bottom))]')}>
+        {i === 0 && <Logo size={56} className="mx-auto mb-2" />}
+        <p className={'text-lg font-bold text-navy ' + (!box ? 'text-center' : '')}>{step.title}</p>
+        <p className={'mt-1 text-sm text-slate-500 ' + (!box ? 'text-center' : '')}>{step.text}</p>
+        <div className="mt-4 flex items-center gap-2">
+          {!last ? <button onClick={onDone} className="px-2 py-2 text-sm font-semibold text-slate-500">Skip</button> : <span className="w-12" />}
+          <span className="flex-1 text-center text-xs text-slate-400">{i + 1} of {TOUR.length}</span>
+          {i > 0 && <button onClick={() => setI(i - 1)} className="rounded-2xl bg-paper px-4 py-2.5 text-sm font-semibold">Back</button>}
+          <button onClick={() => last ? onDone() : setI(i + 1)} className="rounded-2xl bg-azure px-5 py-2.5 text-sm font-semibold text-white">{last ? 'Done' : i === 0 ? 'Start' : 'Next'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['plan', 'Plan']]
 const ICONS = { cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', sync: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
@@ -1035,6 +1097,8 @@ function Sprout({ onLock }) {
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
   const [sync, setSync] = useStore('budgie.sync', null) // { uid, key, sat, map, last } while sync is on; saved like the rest of the data
   const [notice, setNotice] = useState('')
+  const [tour, setTour] = useState(() => { try { return !tourSeen() && !vaultGet('budgie.txs', []).length } catch { return false } }) // shown once, and only to someone with no transactions yet
+  const endTour = () => { tourDone(); setTour(false); setTab('home') }
   const [user, setUser] = useState(null)
   useEffect(() => watchUser(setUser), [])
   // Balances and saved amounts are worked out from the transactions, never stored.
@@ -1114,7 +1178,7 @@ function Sprout({ onLock }) {
   }, [])
   // Back closes an open sheet, then returns to Home, then leaves the app.
   const backRef = useRef(null)
-  backRef.current = () => { if (sheet) setSheet(null); else if (tab !== 'home') setTab('home'); else exitApp() }
+  backRef.current = () => { if (tour) endTour(); else if (sheet) setSheet(null); else if (tab !== 'home') setTab('home'); else exitApp() }
   useEffect(() => onBackButton(() => backRef.current()), [])
   const saveRule = r => {
     recRef.current = recRef.current.some(x => x.id === r.id) ? recRef.current.map(x => x.id === r.id ? r : x) : [...recRef.current, r]
@@ -1147,8 +1211,8 @@ function Sprout({ onLock }) {
         </div>
         <div className="flex gap-2 text-slate-500">
           {pinSet && <button onClick={() => revealed ? setRevealed(false) : setSheet('reveal')} aria-label={revealed ? 'Hide amounts' : 'Show amounts'} className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k={revealed ? 'eye' : 'eyeOff'} /></button>}
-          <button onClick={() => setSheet('security')} aria-label="App lock" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="lock" /></button>
-          <button onClick={() => setSheet('more')} aria-label="More" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="more" /></button>
+          <button data-tour="lock" onClick={() => setSheet('security')} aria-label="App lock" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="lock" /></button>
+          <button data-tour="more" onClick={() => setSheet('more')} aria-label="More" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="more" /></button>
         </div>
       </header>
       <main className="flex-1 overflow-y-auto px-4 pb-36 lg:px-10 lg:pb-10">
@@ -1162,18 +1226,18 @@ function Sprout({ onLock }) {
         </div>
       </main>
       </div>
-      <button onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
+      <button data-tour="add" onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5 lg:static lg:order-first lg:mx-0 lg:w-64 lg:max-w-none lg:shrink-0 lg:flex-col lg:justify-start lg:gap-1 lg:overflow-y-auto lg:border-r lg:border-t-0 lg:px-4 lg:py-8 lg:backdrop-blur-none">
         <div className="hidden items-center gap-2 px-4 pb-6 lg:flex"><Logo size={36} /><p className="text-2xl font-bold text-navy">Sprout</p></div>
-        {TABS.map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
-        <button onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
+        {TABS.map(([k, l]) => <button key={k} data-tour={'tab-' + k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
+        <button data-tour="add" onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
       </nav>
       {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.buyAll && <BuyListSheet plan={sheet.buyAll.plan} items={sheet.buyAll.items} pockets={pockets} onSave={buyAll} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} date={shop.find(p => p.kind === 'plan' && p.id === (sheet.buy.planId || 'plan-main'))?.date} onSave={buy} onClose={() => setSheet(null)} />}
       {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
-      {sheet === 'about' && <AboutSheet onClose={() => setSheet(null)} />}
+      {sheet === 'about' && <AboutSheet onTour={() => { setSheet(null); setTab('home'); setTour(true) }} onClose={() => setSheet(null)} />}
       {sheet === 'cloud' && <CloudSheet user={user} onSync={() => setSheet('sync')} onSignedOut={() => setSync(null)} onClose={() => setSheet(null)} />}
       {sheet === 'sync' && <SyncSheet user={user} sync={sync} status={syncer.status} pristine={pristine} onEnable={async (key, mode) => syncer.enable({ uid: user.uid, key: await exportSyncKey(key), sat: null, map: {}, last: '' }, mode)} onDisable={() => setSync(null)} onSyncNow={syncer.syncNow} onSignIn={() => setSheet('cloud')} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
@@ -1183,6 +1247,7 @@ function Sprout({ onLock }) {
       {sheet?.pin !== undefined && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(sheet.pin) }} /></Sheet>}
       {sheet === 'reveal' && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(null) }} /></Sheet>}
       {sheet === 'security' && <SecuritySheet onClose={() => setSheet(null)} onChange={() => setPinSet(hasPin())} />}
+      {tour && <Tour onTab={setTab} onDone={endTour} />}
       {sheet?.fund && <FundSheet goal={sheet.fund} pockets={pockets} onSave={fund} onClose={() => setSheet(null)} />}
     </div>
     </CatCtx.Provider>
