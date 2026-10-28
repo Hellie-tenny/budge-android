@@ -17,6 +17,7 @@ export const app = initializeApp({
   storageBucket: 'sprout-ledger.firebasestorage.app',
   messagingSenderId: '289711455165',
   appId: '1:289711455165:web:30e301943d603596c930d4',
+  measurementId: 'G-6L5JCLN7RF', 
 })
 
 // In the Android app the web view cannot show Google's pop-up, so it uses plain persistence and Google signs in

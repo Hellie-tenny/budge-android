@@ -1,7 +1,7 @@
 {
   "name": "sprout",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,7 @@
     "android": "vite build && cap sync android && cap open android"
   },
   "dependencies": {
+    "@capacitor-firebase/analytics": "^6.0.0",
     "@capacitor-firebase/authentication": "^6.3.1",
     "@capacitor/android": "^6.1.2",
     "@capacitor/app": "^6.0.3",
