@@ -90,7 +90,8 @@ export async function monthReminders(on, ask = false) {
       notifications: MONTH_IDS.map((id, i) => {
         const at = new Date(now.getFullYear(), now.getMonth() + 1 + i, 1, 9, 0, 0)
         const name = at.toLocaleDateString('en-GB', { month: 'long' })
-        return { id, title: `It's ${name}`, body: `A new month has begun. Set or review your budget for ${name}.`, schedule: { at, allowWhileIdle: true } }
+        const done = new Date(at.getFullYear(), at.getMonth() - 1, 15).toLocaleDateString('en-GB', { month: 'long' })
+        return { id, title: `${done} is done`, body: `See how your money did, and set your budget for ${name}.`, schedule: { at, allowWhileIdle: true } }
       }),
     })
     return true

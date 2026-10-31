@@ -111,3 +111,41 @@ export const removedIds = (prev, next) => { const keep = new Set(next.map(r => r
 
 // A recurring entry always gets the same id for the same day, so two devices posting it produce one record.
 export const recurringTxId = (rule, day) => `rec_${rule.id}_${day}`
+
+// ---- Monthly figures (the Insights summary and the month-end report) ----------------------------
+// Income and spending leave out transfers, money put into goals, and the opening balance of a new account.
+// Pass only the transactions of one space (Personal or Business).
+
+const isIncome = t => t.type === 'in' && t.note !== 'Opening balance'
+const total = (list, f = () => true) => r2(list.reduce((a, t) => a + (f(t) ? t.amount : 0), 0))
+const byCategory = list => {
+  const m = new Map()
+  list.forEach(t => m.set(t.category, (m.get(t.category) || 0) + t.amount))
+  return [...m].map(([id, value]) => ({ id, value: r2(value) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
+}
+
+export const prevMonthKey = key => { const [y, m] = key.split('-').map(Number); return monthKey(new Date(y, m - 2, 15)) }
+export const monthName = (key, style = 'long') => new Date(+key.slice(0, 4), +key.slice(5, 7) - 1, 15).toLocaleDateString('en', { month: style })
+
+export function monthStats(txs, key, today = new Date()) {
+  const inM = txs.filter(t => monthKey(t.date) === key)
+  const income = total(inM, isIncome), outs = inM.filter(t => t.type === 'out'), spending = total(outs)
+  const nowKey = monthKey(today), [y, m] = key.split('-').map(Number)
+  const days = key === nowKey ? today.getDate() : key < nowKey ? new Date(y, m, 0).getDate() : 0 // days that have passed, for the daily average
+  return {
+    key, income, spending, net: r2(income - spending), saved: total(inM, t => t.type === 'sv'),
+    count: inM.filter(t => isIncome(t) || t.type === 'out').length,
+    days, avgDaily: days ? r2(spending / days) : 0,
+    rate: income > 0 ? Math.round(((income - spending) / income) * 100) : null, // share of the income that was kept
+    byCat: byCategory(outs), inCat: byCategory(inM.filter(isIncome)),
+    biggest: [...outs].sort((a, b) => b.amount - a.amount).slice(0, 3),
+  }
+}
+
+// One entry per budget that has a limit, fullest first. byCat is monthStats(...).byCat.
+export const budgetResults = (budgets, byCat) => Object.entries(budgets || {}).filter(([, l]) => l > 0)
+  .map(([id, limit]) => { const spent = byCat.find(d => d.id === id)?.value || 0; return { id, limit, spent, over: spent > limit } })
+  .sort((a, b) => b.spent / b.limit - a.spent / a.limit)
+
+// The total balance at the end of a month, worked back from today's total balance.
+export const balanceAtEnd = (txs, now, key) => r2(now - txs.filter(t => monthKey(t.date) > key).reduce((a, t) => a + (t.type === 'in' ? t.amount : t.type === 'out' || t.type === 'sv' ? -t.amount : 0), 0))

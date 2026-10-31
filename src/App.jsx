@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId } from './logic.js'
+import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
 import Logo from './Logo.jsx'
@@ -138,7 +138,7 @@ function Home({ pockets, txs, budgets, biz, setTab, onAccount }) {
   const { get } = useCats()
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const m = txs.filter(t => month(t.date) === thisMonth())
-  const inc = m.filter(t => t.type === 'in' && !(biz && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0) // a business's opening balance is not a sale
+  const inc = m.filter(t => t.type === 'in' && t.note !== 'Opening balance').reduce((a, t) => a + t.amount, 0) // an account's opening balance is not income
   const spent = m.filter(t => t.type === 'out')
   const out = spent.reduce((a, t) => a + t.amount, 0)
   const byCat = [...new Set(spent.map(t => t.category))].map(id => ({ id, name: get(id).name, color: get(id).color, value: spent.filter(t => t.category === id).reduce((a, t) => a + t.amount, 0) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
@@ -195,23 +195,48 @@ function Activity({ txs, onDelete, onEdit }) {
   )
 }
 
-function Insights({ txs, pockets }) {
-  const [which, setWhich] = useState(0)
+// Category rows with a bar and each one's share of the total. The bars (and so the shares) are hidden while amounts are.
+function Bars({ data, color }) {
   const { get } = useCats()
+  const sum = data.reduce((a, d) => a + d.value, 0)
+  return (
+    <div className="space-y-3">{data.map(d => <div key={d.id}>
+      <div className="flex justify-between text-sm"><span>{get(d.id).emoji || EMO[d.id]} {get(d.id).name}</span><span>{mk(d.value)}{!mask.on && ' · ' + Math.round((d.value / sum) * 100) + '%'}</span></div>
+      {!mask.on && <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.value / data[0].value) * 100 + '%', background: color || get(d.id).color }} /></div>}
+    </div>)}</div>
+  )
+}
+
+function Insights({ txs, pockets, biz, onReport }) {
+  const [which, setWhich] = useState(0)
   const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: monthKey(d), label: d.toLocaleString('en', { month: 'short' }) } })
   if (!txs.length) return <p className="mt-10 text-center text-slate-500">Add a few transactions and your charts will show up here.</p>
-  const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type).reduce((a, t) => a + t.amount, 0)
+  const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type && !(type === 'in' && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0)
   const data = months.map(m => ({ ...m, inc: sum(m.key, 'in'), out: sum(m.key, 'out') }))
   const max = Math.max(1, ...data.flatMap(d => [d.inc, d.out]))
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const bal = months.map(m => total - txs.filter(t => month(t.date) > m.key).reduce((a, t) => a + net(t), 0))
   const lo = Math.min(...bal), hi = Math.max(...bal)
   const pts = bal.map((v, i) => [30 + i * 48, 100 - ((v - lo) / (hi - lo || 1)) * 80])
-  const inMonth = txs.filter(t => t.type === 'out' && month(t.date) === mKey(which))
-  const cats = [...new Set(inMonth.map(t => t.category))].map(c => ({ c, v: inMonth.filter(t => t.category === c).reduce((a, t) => a + t.amount, 0) })).filter(d => d.v > 0).sort((a, b) => b.v - a.v)
+  const key = mKey(which), st = monthStats(txs, key), pv = monthStats(txs, prevMonthKey(key))
+  const vs = (a, b) => (b ? `${mk(Math.abs(a - b))} ${a >= b ? 'more' : 'less'} than ${monthName(pv.key, 'short')}` : '')
+  const tiles = [
+    ['Money in', st.income, vs(st.income, pv.income)],
+    ['Spending', st.spending, vs(st.spending, pv.spending)],
+    [biz ? 'Profit' : 'Left over', st.net, st.rate === null ? '' : st.net >= 0 ? `${st.rate}% of what came in` : 'More went out than came in', true],
+    ['Average a day', st.avgDaily, st.days ? `spent over ${st.days} day${st.days > 1 ? 's' : ''}` : ''],
+  ]
   const lab = { fontSize: 10, fill: '#868e96' }
   return (
     <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
+      <Card className="lg:col-span-2">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold">{monthName(key)}{which === 0 ? ' so far' : ''}</h3>
+          <div className="flex gap-1 rounded-xl bg-paper p-1 text-xs font-semibold">{['This month', 'Last month'].map((l, i) => <button key={l} onClick={() => setWhich(i)} className={'rounded-lg px-2.5 py-1 ' + (which === i ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}</div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{tiles.map(([l, v, sub, signed]) => <div key={l} className="rounded-2xl bg-paper p-3"><p className="text-xs text-slate-500">{l}</p><p className={'text-lg font-bold ' + (signed && v < 0 ? 'text-down' : '')}>{mk(v)}</p>{sub && <p className="text-xs text-slate-500">{sub}</p>}</div>)}</div>
+        <div className="mt-3 flex items-center justify-between text-sm"><span className="text-slate-500">{st.count} transaction{st.count === 1 ? '' : 's'}</span><button onClick={() => onReport(key)} className="font-semibold text-azure">View full report</button></div>
+      </Card>
       <Card>
         <h3 className="font-semibold">Income and spending</h3>
         <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full">
@@ -231,17 +256,56 @@ function Insights({ txs, pockets }) {
         </svg></Hide>
       </Card>
       <Card className="lg:col-span-2">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold">By category</h3>
-          <div className="flex gap-1 rounded-xl bg-paper p-1 text-xs font-semibold">{['This month', 'Last month'].map((l, i) => <button key={l} onClick={() => setWhich(i)} className={'rounded-lg px-2.5 py-1 ' + (which === i ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}</div>
-        </div>
-        {!cats.length && <p className="text-sm text-slate-500">No spending in this month.</p>}
-        <div className="space-y-3">{cats.map(d => <div key={d.c}>
-          <div className="flex justify-between text-sm"><span>{get(d.c).emoji || EMO[d.c]} {get(d.c).name}</span><span>{mk(d.v)}</span></div>
-          {!mask.on && <div className="mt-1 h-2.5 rounded-full bg-mist/40"><div className="h-2.5 rounded-full" style={{ width: (d.v / cats[0].v) * 100 + '%', background: get(d.c).color }} /></div>}
-        </div>)}</div>
+        <h3 className="mb-3 font-semibold">Spending by category · {monthName(key)}</h3>
+        {!st.byCat.length ? <p className="text-sm text-slate-500">No spending in this month.</p> : <Bars data={st.byCat} />}
       </Card>
+      {st.biggest.length > 0 && <Card>
+        <h3 className="mb-1 font-semibold">Biggest expenses</h3>
+        <div className="divide-y divide-black/5 dark:divide-white/5">{st.biggest.map(t => <TxRow key={t.id} t={t} />)}</div>
+      </Card>}
+      {st.inCat.length > 0 && <Card>
+        <h3 className="mb-3 font-semibold">Where the money came from</h3>
+        <Bars data={st.inCat} color="#42a542" />
+      </Card>}
     </div>
+  )
+}
+
+// The report for one month (the one that just ended, or this month so far). Opened from Insights and from the new-month banner.
+function ReportSheet({ txs, pockets, budgets, month: key, biz, onClose }) {
+  const { get } = useCats()
+  const st = monthStats(txs, key), pv = monthStats(txs, prevMonthKey(key))
+  const now = pockets.reduce((a, p) => a + p.balance, 0), partial = key === thisMonth()
+  const results = budgetResults(budgets, st.byCat), kept = results.filter(r => !r.over).length
+  const name = monthName(key), vs = (a, b) => (b ? `${mk(Math.abs(a - b))} ${a >= b ? 'more' : 'less'} than ${monthName(pv.key, 'short')}` : '')
+  const row = (label, value, sub) => <div className="flex items-start justify-between gap-3 py-2"><span className="text-slate-500">{label}</span><span className="text-right"><span className="block font-semibold">{value}</span>{sub && <span className="block text-xs text-slate-500">{sub}</span>}</span></div>
+  return (
+    <Sheet onClose={onClose}>
+      <h3 className="text-center font-semibold">{name} {key.slice(0, 4)} {biz ? 'business ' : ''}report</h3>
+      {partial && <p className="text-center text-xs text-slate-500">The month is not over yet, so this is the story so far.</p>}
+      {st.count === 0 ? <p className="py-6 text-center text-slate-500">No transactions in {name}.</p> : <>
+        <div className="rounded-2xl bg-paper p-4 text-center">
+          <p className="text-sm text-slate-500">{biz ? (st.net >= 0 ? 'Profit' : 'Loss') : st.net >= 0 ? 'Left over' : 'Overspent by'}</p>
+          <p className={'text-4xl font-bold ' + (st.net < 0 ? 'text-down' : '')}>{mk(Math.abs(st.net))}</p>
+          <p className="mt-1 text-sm text-slate-500">{st.net < 0 ? 'More went out than came in.' : st.rate === null ? '' : `You kept ${st.rate}% of what came in.`}</p>
+        </div>
+        <div className="divide-y divide-black/5 dark:divide-white/5">
+          {row('Money in', mk(st.income), vs(st.income, pv.income))}
+          {row('Spending', mk(st.spending), vs(st.spending, pv.spending))}
+          {row('Average a day', mk(st.avgDaily), st.days ? `over ${st.days} day${st.days > 1 ? 's' : ''}` : '')}
+          {!biz && st.saved > 0 && row('Put into goals', mk(st.saved))}
+          {row(partial ? 'Balance now' : `Balance at the end of ${name}`, mk(partial ? now : balanceAtEnd(txs, now, key)))}
+        </div>
+        {st.byCat.length > 0 && <><h4 className="pt-1 font-semibold">Where it went</h4><Bars data={st.byCat.slice(0, 5)} /></>}
+        {st.biggest.length > 0 && <><h4 className="pt-1 font-semibold">Biggest expenses</h4><div className="divide-y divide-black/5 dark:divide-white/5">{st.biggest.map(t => <TxRow key={t.id} t={t} />)}</div></>}
+        {biz && st.inCat.length > 0 && <><h4 className="pt-1 font-semibold">Where the money came from</h4><Bars data={st.inCat} color="#42a542" /></>}
+        {results.length > 0 && <>
+          <h4 className="pt-1 font-semibold">Budgets: {kept} of {results.length} kept</h4>
+          <div className="divide-y divide-black/5 dark:divide-white/5">{results.map(r => <div key={r.id} className="flex items-center justify-between gap-3 py-2 text-sm"><span>{get(r.id).emoji || EMO[r.id]} {get(r.id).name}</span><span className={'text-right ' + (r.over ? 'text-down' : 'text-slate-500')}>{mk(r.spent)} of {mk(r.limit)}<span className="block text-xs">{r.over ? `Over by ${mk(r.spent - r.limit)}` : `${mk(r.limit - r.spent)} left`}</span></span></div>)}</div>
+        </>}
+      </>}
+      <Save onClick={onClose}>Close</Save>
+    </Sheet>
   )
 }
 
@@ -254,7 +318,7 @@ function Budgets({ budgets, setBudgets, txs, onManage, remind, setRemind }) {
         <p className="text-sm text-slate-500">Set a monthly limit for each category. It repeats every month until you change it. Leave it empty for no limit.</p>
         <button onClick={onManage} className="shrink-0 text-sm font-semibold text-azure">Edit categories</button>
       </div>
-      {isNative() && <label className="flex items-center justify-between gap-3 rounded-2xl bg-surface p-3 text-sm lg:col-span-2"><span>Remind me at the start of each month</span><input type="checkbox" checked={remind} onChange={e => setRemind(e.target.checked)} className="h-5 w-5 accent-azure" /></label>}
+      {isNative() && <label className="flex items-center justify-between gap-3 rounded-2xl bg-surface p-3 text-sm lg:col-span-2"><span>Remind me at the start of each month, with last month's report</span><input type="checkbox" checked={remind} onChange={e => setRemind(e.target.checked)} className="h-5 w-5 accent-azure" /></label>}
       {active('out').map(({ id: c, name, color }) => {
         const lim = budgets[c] || 0, s = spent(c), pct = lim ? Math.min(100, (s / lim) * 100) : 0, bad = lim && s > lim
         return (
@@ -714,7 +778,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.7'
+const APP_VERSION = '1.0.4'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1279,11 +1343,11 @@ function Sprout({ onLock }) {
       </header>
       <main className="flex-1 overflow-y-auto px-4 pb-36 lg:px-10 lg:pb-10">
         <div className="mx-auto w-full lg:max-w-6xl">
-        {newMonth && <div className="mb-3 flex items-center gap-3 rounded-2xl bg-azure/10 p-3 text-sm text-azure"><span className="flex-1">{Object.values(budgets).some(v => v > 0) ? `It's ${newMonth}. Your limits carried over: check they still fit.` : `It's ${newMonth}. Set a budget to see how much you can spend each day.`}</span><button onClick={() => { setNewMonth(''); setTab('budgets') }} className="font-semibold">Budgets</button><button onClick={() => setNewMonth('')} aria-label="Dismiss" className="px-1 opacity-70">✕</button></div>}
+        {newMonth && <div className="mb-3 flex items-center gap-3 rounded-2xl bg-azure/10 p-3 text-sm text-azure"><span className="flex-1">{Object.values(budgets).some(v => v > 0) ? `It's ${newMonth}. Your limits carried over: check they still fit.` : `It's ${newMonth}. Set a budget to see how much you can spend each day.`}</span>{spaceTxs.some(t => month(t.date) === prevMonthKey(thisMonth())) && <button onClick={() => { setNewMonth(''); needPin({ report: prevMonthKey(thisMonth()) }) }} className="font-semibold">Report</button>}<button onClick={() => { setNewMonth(''); setTab('budgets') }} className="font-semibold">Budgets</button><button onClick={() => setNewMonth('')} aria-label="Dismiss" className="px-1 opacity-70">✕</button></div>}
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
         {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
-        {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} />}
+        {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} biz={biz} onReport={k => needPin({ report: k })} />}
         {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
         {tab === 'plan' && !biz && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={spaceBudgets} txs={spaceTxs} pockets={spacePockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
@@ -1308,6 +1372,7 @@ function Sprout({ onLock }) {
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
       {sheet === 'account' && <AccountSheet taken={rawPockets.map(p => p.name.trim().toLowerCase())} onSave={addAccount} onClose={() => setSheet(null)} />}
       {sheet?.pin !== undefined && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(sheet.pin) }} /></Sheet>}
+      {sheet?.report && <ReportSheet txs={spaceTxs} pockets={spacePockets} budgets={spaceBudgets} month={sheet.report} biz={biz} onClose={() => setSheet(null)} />}
       {sheet === 'space' && <Sheet onClose={() => setSheet(null)}>
         <h3 className="text-center font-semibold">Switch to</h3>
         {[['personal', 'Personal', 'Your own money'], ['business', 'Business', 'Keep a business apart']].map(([k, l, d]) => <button key={k} onClick={() => { switchSpace(k); setSheet(null) }} className={'flex w-full items-center gap-3 rounded-2xl p-3 text-left ' + (space === k ? 'bg-azure/10' : 'active:bg-paper')}><span className="grid h-10 w-10 place-items-center rounded-full bg-paper text-azure"><Icon k={k === 'business' ? 'biz' : 'person'} /></span><span className="flex-1"><span className="block font-semibold">{l}</span><span className="block text-xs text-slate-500">{d}</span></span>{space === k && <span className="text-sm font-semibold text-azure">Current</span>}</button>)}
