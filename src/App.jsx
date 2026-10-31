@@ -383,6 +383,7 @@ function AddSheet({ pockets, txs, edit, onSave, onNewCat, onClose }) {
   const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to) || !day || day > today
   const save = () => onSave({ ...(edit || {}), id: edit?.id || uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: toISO(day, edit?.date) })
   const notes = [...new Set(txs.filter(t => t.type === type && t.note && t.note !== 'Opening balance').map(t => t.note))].slice(0, 20)
+  const q = note.trim().toLowerCase(), hints = notes.filter(n => n.toLowerCase() !== q && n.toLowerCase().includes(q)).slice(0, 6) // earlier notes, narrowed as you type; shown as chips above the field so the keyboard never covers them
   const opts = pick(type), shown = type !== 'tr' && !opts.some(c => c.id === category) ? [get(category), ...opts] : opts // keep a hidden category visible while editing its transaction
   if (adding) return <Sheet onClose={() => setAdding(false)}><CatForm init={{ kind: type }} fixedKind onCancel={() => setAdding(false)} onSave={c => { onNewCat(c); setCategory(c.id); setAdding(false) }} /></Sheet>
   return (
@@ -401,8 +402,8 @@ function AddSheet({ pockets, txs, edit, onSave, onNewCat, onClose }) {
         <label className={'block text-xs text-slate-500 ' + (type === 'tr' ? 'col-span-2' : '')}>Date<input type="date" value={day} max={today} onChange={e => setDay(e.target.value)} className={field + ' mt-1 text-base text-ink'} /></label>
       </div>
       {type !== 'tr' && <>
-        <input list="recent-notes" value={note} onChange={e => setNote(e.target.value)} placeholder={type === 'out' ? 'What was it? e.g. Lunch at Shoprite' : 'Where is it from? e.g. March salary'} className={field} />
-        <datalist id="recent-notes">{notes.map(n => <option key={n} value={n} />)}</datalist>
+        {hints.length > 0 && <div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1">{hints.map(n => <button key={n} onClick={() => setNote(n)} className="shrink-0 rounded-full bg-paper px-3 py-1.5 text-sm">{n}</button>)}</div>}
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder={type === 'out' ? 'What was it? e.g. Lunch at Shoprite' : 'Where is it from? e.g. March salary'} className={field} />
       </>}
       {type === 'tr' && pocket === to && <p className="text-sm text-down">Pick two different accounts.</p>}
       {day > today && <p className="text-sm text-down">Pick today or an earlier date.</p>}
@@ -778,7 +779,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.8'
+const APP_VERSION = '1.0.9'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
