@@ -149,3 +149,21 @@ export const budgetResults = (budgets, byCat) => Object.entries(budgets || {}).f
 
 // The total balance at the end of a month, worked back from today's total balance.
 export const balanceAtEnd = (txs, now, key) => r2(now - txs.filter(t => monthKey(t.date) > key).reduce((a, t) => a + (t.type === 'in' ? t.amount : t.type === 'out' || t.type === 'sv' ? -t.amount : 0), 0))
+
+// Spending against the budget through the current month. Only categories that have a limit count, as on Home.
+// cum[i] is the total spent by the end of day i + 1; paceToday is where an even spread of the budget would be today.
+export function paceSeries(txs, budgets, today = new Date()) {
+  const limited = new Set(Object.entries(budgets || {}).filter(([, l]) => l > 0).map(([c]) => c))
+  const limit = r2(Object.values(budgets || {}).reduce((a, l) => a + (l > 0 ? l : 0), 0))
+  if (!limit) return null
+  const key = monthKey(today), dim = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate(), now = today.getDate()
+  const daily = Array(now).fill(0)
+  txs.forEach(t => {
+    if (t.type !== 'out' || !limited.has(t.category) || monthKey(t.date) !== key) return
+    const d = new Date(t.date).getDate()
+    if (d >= 1 && d <= now) daily[d - 1] += t.amount
+  })
+  let run = 0
+  const cum = daily.map(v => (run = r2(run + v)))
+  return { limit, dim, now, cum, spent: run, paceToday: r2((limit * now) / dim) }
+}

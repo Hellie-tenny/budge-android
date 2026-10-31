@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd } from './logic.js'
+import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd, paceSeries } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
 import Logo from './Logo.jsx'
@@ -207,8 +207,35 @@ function Bars({ data, color }) {
   )
 }
 
-function Insights({ txs, pockets, biz, onReport }) {
+// ---- Chart helpers (the charts are drawn by hand as SVG) ----
+const LAB = { fontSize: 10, fill: '#868e96' }
+const PLOT = { l: 38, r: 292, t: 10, b: 112 } // the drawing area inside a 300 x 140 chart
+const kfmt = v => (v < 0 ? '-' : '') + (Math.abs(v) >= 1000 ? (Math.abs(v) / 1000).toFixed(Math.abs(v) < 10000 ? 1 : 0).replace('.0', '') + 'k' : Math.round(Math.abs(v)))
+const niceStep = (span, n) => { const raw = span / n, mag = 10 ** Math.floor(Math.log10(raw)), f = raw / mag; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * mag }
+function axisFor(lo, hi, n = 4) { // round numbers for the side scale, always including lo and hi
+  if (!(hi > lo)) hi = lo + Math.max(10, Math.abs(lo) * 0.1) // a flat line still gets a scale
+  const step = niceStep(hi - lo, n), min = Math.floor(lo / step) * step, max = Math.ceil(hi / step) * step, ticks = []
+  for (let v = min; v <= max + step / 2; v += step) ticks.push(Math.round(v * 100) / 100)
+  return { min, max, ticks }
+}
+const scaleY = ax => v => PLOT.b - ((v - ax.min) / (ax.max - ax.min)) * (PLOT.b - PLOT.t)
+// A smooth line through points that never overshoots them
+const bump = pts => pts.map(([x, y], i) => (i === 0 ? `M${x},${y}` : `C${(pts[i - 1][0] + x) / 2},${pts[i - 1][1]} ${(pts[i - 1][0] + x) / 2},${y} ${x},${y}`)).join(' ')
+// A bar with the data end rounded and the baseline end square
+const bar = (x, y, w, h, up = true, r = 4) => { r = Math.min(r, h, w / 2); return up ? `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z` : `M${x},${y}V${y + h - r}Q${x},${y + h} ${x + r},${y + h}H${x + w - r}Q${x + w},${y + h} ${x + w},${y + h - r}V${y}Z` }
+const Fade = ({ id, color }) => <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity=".32" /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+const Grid = ({ ax, sy }) => ax.ticks.map(v => <g key={v}><line x1={PLOT.l} x2={PLOT.r} y1={sy(v)} y2={sy(v)} stroke="#d7d7dd" strokeOpacity={v === 0 ? 1 : 0.5} /><text x={PLOT.l - 5} y={sy(v) + 3} textAnchor="end" {...LAB}>{kfmt(v)}</text></g>)
+// Tooltip drawn inside the chart. Hover shows it on a computer; a tap shows it on a phone.
+function Tip({ x, y, lines }) {
+  const w = Math.max(...lines.map(l => l.length)) * 5.4 + 14, h = lines.length * 13 + 8
+  const tx = Math.min(Math.max(x - w / 2, 2), 298 - w), ty = Math.max(y - h - 8, 2)
+  return <g pointerEvents="none"><rect x={tx} y={ty} width={w} height={h} rx="6" className="fill-ink" opacity=".92" />{lines.map((l, i) => <text key={i} x={tx + 7} y={ty + 14 + i * 13} className="fill-surface" style={{ fontSize: 10, fontWeight: i ? 400 : 600 }}>{l}</text>)}</g>
+}
+
+function Insights({ txs, pockets, budgets, biz, onReport }) {
+  const { get } = useCats()
   const [which, setWhich] = useState(0)
+  const [tip, setTip] = useState(null) // { c: which chart, i: which column } while one is hovered or tapped
   const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: monthKey(d), label: d.toLocaleString('en', { month: 'short' }) } })
   if (!txs.length) return <p className="mt-10 text-center text-slate-500">Add a few transactions and your charts will show up here.</p>
   const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type && !(type === 'in' && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0)
@@ -216,8 +243,6 @@ function Insights({ txs, pockets, biz, onReport }) {
   const max = Math.max(1, ...data.flatMap(d => [d.inc, d.out]))
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const bal = months.map(m => total - txs.filter(t => month(t.date) > m.key).reduce((a, t) => a + net(t), 0))
-  const lo = Math.min(...bal), hi = Math.max(...bal)
-  const pts = bal.map((v, i) => [30 + i * 48, 100 - ((v - lo) / (hi - lo || 1)) * 80])
   const key = mKey(which), st = monthStats(txs, key), pv = monthStats(txs, prevMonthKey(key))
   const vs = (a, b) => (b ? `${mk(Math.abs(a - b))} ${a >= b ? 'more' : 'less'} than ${monthName(pv.key, 'short')}` : '')
   const tiles = [
@@ -226,7 +251,35 @@ function Insights({ txs, pockets, biz, onReport }) {
     [biz ? 'Profit' : 'Left over', st.net, st.rate === null ? '' : st.net >= 0 ? `${st.rate}% of what came in` : 'More went out than came in', true],
     ['Average a day', st.avgDaily, st.days ? `spent over ${st.days} day${st.days > 1 ? 's' : ''}` : ''],
   ]
-  const lab = { fontSize: 10, fill: '#868e96' }
+  // Hover and tap handling shared by the charts
+  const colW = (PLOT.r - PLOT.l) / 6, cx = i => PLOT.l + (i + 0.5) * colW
+  const at = c => (tip && tip.c === c ? tip.i : null)
+  const hit = (c, i) => ({ onMouseEnter: () => setTip({ c, i }), onClick: () => setTip(t => (t && t.c === c && t.i === i ? null : { c, i })) })
+  const cols = c => months.map((m, i) => <rect key={m.key} x={PLOT.l + i * colW} y={PLOT.t} width={colW} height={PLOT.b - PLOT.t + 16} fill="transparent" {...hit(c, i)} />)
+  const band = c => at(c) !== null && <rect x={PLOT.l + at(c) * colW} y={PLOT.t} width={colW} height={PLOT.b - PLOT.t} rx="4" className="fill-ink" opacity=".05" />
+  const mname = i => monthName(months[i].key) + ' ' + months[i].key.slice(0, 4)
+  const monthLabels = months.map((m, i) => <text key={m.key} x={cx(i)} y="130" textAnchor="middle" {...LAB}>{m.label}</text>)
+  // Income and spending
+  const ioAx = axisFor(0, max), ioY = scaleY(ioAx)
+  // Balance over time
+  const bAx = axisFor(Math.min(...bal), Math.max(...bal)), bY = scaleY(bAx), bPts = bal.map((v, i) => [cx(i), bY(v)])
+  // Spending against the budget this month
+  const pace = paceSeries(txs, budgets)
+  const pAx = pace ? axisFor(0, Math.max(pace.limit, pace.spent) * 1.02) : null, pY = pace ? scaleY(pAx) : null
+  const pX = d => PLOT.l + ((d - 1) / Math.max(1, pace.dim - 1)) * (PLOT.r - PLOT.l), pw = pace ? (PLOT.r - PLOT.l) / Math.max(1, pace.dim - 1) : 0
+  const pPts = pace ? pace.cum.map((v, i) => [pX(i + 1), pY(v)]) : []
+  const pd = at('pace')
+  // Left over (Profit in Business) in each of the last six months: above the line is a gain, below it a loss
+  const stats6 = months.map(m => monthStats(txs, m.key)), nets = stats6.map(s => s.net)
+  const nAx = axisFor(Math.min(0, ...nets), Math.max(0, ...nets)), nY = scaleY(nAx)
+  // Spending by category over six months: the four biggest categories, everything else together as Other
+  const tally = new Map()
+  stats6.forEach(s => s.byCat.forEach(d => tally.set(d.id, (tally.get(d.id) || 0) + d.value)))
+  const top = [...tally].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([id]) => id)
+  const stacks = stats6.map(s => { const parts = top.map(id => ({ id, value: s.byCat.find(d => d.id === id)?.value || 0 })), rest = s.byCat.filter(d => !top.includes(d.id)).reduce((a, d) => a + d.value, 0); return rest > 0 ? [...parts, { id: 'other', value: rest }] : parts })
+  const stackTotals = stacks.map(p => p.reduce((a, d) => a + d.value, 0)), tAx = axisFor(0, Math.max(1, ...stackTotals)), tY = scaleY(tAx)
+  const hue = id => (id === 'other' ? '#868e96' : get(id).color), nameOf = id => (id === 'other' ? 'Other' : get(id).name)
+  const showTrend = stats6.filter(s => s.spending > 0).length >= 2
   return (
     <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
       <Card className="lg:col-span-2">
@@ -237,24 +290,85 @@ function Insights({ txs, pockets, biz, onReport }) {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{tiles.map(([l, v, sub, signed]) => <div key={l} className="rounded-2xl bg-paper p-3"><p className="text-xs text-slate-500">{l}</p><p className={'text-lg font-bold ' + (signed && v < 0 ? 'text-down' : '')}>{mk(v)}</p>{sub && <p className="text-xs text-slate-500">{sub}</p>}</div>)}</div>
         <div className="mt-3 flex items-center justify-between text-sm"><span className="text-slate-500">{st.count} transaction{st.count === 1 ? '' : 's'}</span><button onClick={() => onReport(key)} className="font-semibold text-azure">View full report</button></div>
       </Card>
+      {pace && <Card className="lg:col-span-2">
+        <h3 className="font-semibold">Spending pace · {monthName(mKey(0))}</h3>
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full" role="img" aria-label="Spending so far this month against an even pace to your budget" onMouseLeave={() => setTip(null)}>
+          <Fade id="fade-pace" color="#3d7ddd" />
+          <Grid ax={pAx} sy={pY} />
+          <line x1={pX(1)} y1={pY(pace.limit / pace.dim)} x2={pX(pace.dim)} y2={pY(pace.limit)} stroke="#868e96" strokeWidth="2" strokeDasharray="6 4" />
+          {pPts.length > 1 && <><path d={bump(pPts) + ` L${pPts[pPts.length - 1][0]},${PLOT.b} L${pPts[0][0]},${PLOT.b} Z`} fill="url(#fade-pace)" /><path d={bump(pPts)} fill="none" stroke="#3d7ddd" strokeWidth="2.5" strokeLinecap="round" /></>}
+          <circle cx={pX(pace.now)} cy={pY(pace.spent)} r="4" fill="#3d7ddd" className="stroke-surface" strokeWidth="2" />
+          <text x={PLOT.r} y={pY(pace.limit) - 5} textAnchor="end" {...LAB}>Budget {mk(pace.limit)}</text>
+          {[1, Math.round(pace.dim / 2), pace.dim].map(d => <text key={d} x={pX(d)} y="130" textAnchor="middle" {...LAB}>{d}</text>)}
+          {Array.from({ length: pace.dim }, (_, i) => <rect key={i} x={pX(i + 1) - pw / 2} y={PLOT.t} width={pw} height={PLOT.b - PLOT.t + 16} fill="transparent" {...hit('pace', i)} />)}
+          {pd !== null && <g pointerEvents="none">
+            <line x1={pX(pd + 1)} x2={pX(pd + 1)} y1={PLOT.t} y2={PLOT.b} stroke="#868e96" strokeOpacity=".5" />
+            {pd < pace.now && <circle cx={pX(pd + 1)} cy={pY(pace.cum[pd])} r="4" fill="#3d7ddd" className="stroke-surface" strokeWidth="2" />}
+            <circle cx={pX(pd + 1)} cy={pY((pace.limit * (pd + 1)) / pace.dim)} r="3.5" fill="#868e96" className="stroke-surface" strokeWidth="2" />
+          </g>}
+          {pd !== null && <Tip x={pX(pd + 1)} y={pd < pace.now ? Math.min(pY(pace.cum[pd]), pY((pace.limit * (pd + 1)) / pace.dim)) : pY((pace.limit * (pd + 1)) / pace.dim)} lines={[`Day ${pd + 1}`, ...(pd < pace.now ? ['Spent: ' + mk(pace.cum[pd])] : []), 'Even pace: ' + mk((pace.limit * (pd + 1)) / pace.dim)]} />}
+        </svg></Hide>
+        <p className="mt-1 flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-0.5 w-3.5 bg-azure align-middle" />Spent so far</span><span><i className="mr-1 inline-block w-3.5 border-t-2 border-dashed border-slate-400 align-middle" />Even pace to your budget</span></p>
+        <p className="mt-2 text-sm">{pace.spent > pace.paceToday ? `${mk(pace.spent - pace.paceToday)} ahead of an even pace.` : `${mk(pace.paceToday - pace.spent)} under an even pace.`} <span className="text-slate-500">Counts the categories that have a limit.</span></p>
+      </Card>}
       <Card>
         <h3 className="font-semibold">Income and spending</h3>
-        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full">
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full" role="img" aria-label="Income and spending in each of the last six months" onMouseLeave={() => setTip(null)}>
+          <Grid ax={ioAx} sy={ioY} />
+          {band('io')}
           {data.map((d, i) => <g key={d.key}>
-            <rect x={14 + i * 48} y={110 - (d.inc / max) * 100} width="14" height={(d.inc / max) * 100} rx="4" fill="#42a542" />
-            <rect x={30 + i * 48} y={110 - (d.out / max) * 100} width="14" height={(d.out / max) * 100} rx="4" fill="#ec4c4c" />
-            <text x={30 + i * 48} y="130" textAnchor="middle" {...lab}>{d.label}</text>
+            {d.inc > 0 && <path d={bar(cx(i) - 12, ioY(d.inc), 11, PLOT.b - ioY(d.inc))} fill="#42a542" />}
+            {d.out > 0 && <path d={bar(cx(i) + 1, ioY(d.out), 11, PLOT.b - ioY(d.out))} fill="#ec4c4c" />}
           </g>)}
+          {monthLabels}
+          {cols('io')}
+          {at('io') !== null && <Tip x={cx(at('io'))} y={ioY(Math.max(data[at('io')].inc, data[at('io')].out))} lines={[mname(at('io')), 'Income: ' + mk(data[at('io')].inc), 'Spending: ' + mk(data[at('io')].out)]} />}
         </svg></Hide>
         <p className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-up" />Income</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-down" />Spending</span></p>
       </Card>
       <Card>
         <h3 className="font-semibold">Balance over time</h3>
-        <Hide className="mt-2 h-32 w-full"><svg viewBox="0 0 300 130" className="w-full">
-          <polyline points={pts.map(p => p.join(',')).join(' ')} fill="none" stroke="#3d7ddd" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-          {pts.map((p, i) => <g key={i}><circle cx={p[0]} cy={p[1]} r="4" fill="#3d7ddd" /><text x={p[0]} y="125" textAnchor="middle" {...lab}>{months[i].label}</text></g>)}
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full" role="img" aria-label="Total balance at the end of each of the last six months" onMouseLeave={() => setTip(null)}>
+          <Fade id="fade-bal" color="#3d7ddd" />
+          <Grid ax={bAx} sy={bY} />
+          {band('bal')}
+          <path d={bump(bPts) + ` L${bPts[bPts.length - 1][0]},${PLOT.b} L${bPts[0][0]},${PLOT.b} Z`} fill="url(#fade-bal)" />
+          <path d={bump(bPts)} fill="none" stroke="#3d7ddd" strokeWidth="2.5" strokeLinecap="round" />
+          {bPts.map((p, i) => <circle key={i} cx={p[0]} cy={p[1]} r={at('bal') === i ? 5 : 3.5} fill="#3d7ddd" className="stroke-surface" strokeWidth="2" />)}
+          {monthLabels}
+          {cols('bal')}
+          {at('bal') !== null && <Tip x={cx(at('bal'))} y={bPts[at('bal')][1]} lines={[mname(at('bal')), 'Balance: ' + mk(bal[at('bal')])]} />}
         </svg></Hide>
       </Card>
+      <Card>
+        <h3 className="font-semibold">{biz ? 'Profit by month' : 'Left over by month'}</h3>
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full" role="img" aria-label={biz ? 'Profit or loss in each of the last six months' : 'Money left over or overspent in each of the last six months'} onMouseLeave={() => setTip(null)}>
+          <Grid ax={nAx} sy={nY} />
+          {band('net')}
+          {nets.map((v, i) => { const y0 = nY(0), y = nY(v); return v === 0 ? null : <g key={months[i].key}>
+            <path d={v > 0 ? bar(cx(i) - 11, y, 22, y0 - y) : bar(cx(i) - 11, y0, 22, y - y0, false)} fill={v < 0 ? '#e8590c' : '#3d7ddd'} />
+            <text x={cx(i)} y={v > 0 ? y - 4 : y + 11} textAnchor="middle" {...LAB}>{kfmt(v)}</text>
+          </g> })}
+          {monthLabels}
+          {cols('net')}
+          {at('net') !== null && <Tip x={cx(at('net'))} y={Math.min(nY(0), nY(nets[at('net')]))} lines={[mname(at('net')), 'Money in: ' + mk(stats6[at('net')].income), 'Spending: ' + mk(stats6[at('net')].spending), (nets[at('net')] < 0 ? (biz ? 'Loss: ' : 'Overspent: ') : biz ? 'Profit: ' : 'Left over: ') + mk(Math.abs(nets[at('net')]))]} />}
+        </svg></Hide>
+        <p className="flex gap-4 text-xs text-slate-500"><span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: '#3d7ddd' }} />{biz ? 'Profit' : 'Left over'} (above the line)</span><span><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: '#e8590c' }} />{biz ? 'Loss' : 'Overspent'} (below the line)</span></p>
+      </Card>
+      {showTrend && <Card>
+        <h3 className="font-semibold">Spending by category over time</h3>
+        <Hide className="mt-2 h-36 w-full"><svg viewBox="0 0 300 140" className="w-full" role="img" aria-label="Spending by category in each of the last six months" onMouseLeave={() => setTip(null)}>
+          <Grid ax={tAx} sy={tY} />
+          {band('trend')}
+          {stacks.map((parts, i) => { let acc = PLOT.b; return <g key={months[i].key}>
+            {parts.map(d => { const h = (d.value / tAx.max) * (PLOT.b - PLOT.t); acc -= h; return h > 0 ? <rect key={d.id} x={cx(i) - 11} y={acc} width="22" height={h} fill={hue(d.id)} className="stroke-surface" strokeWidth="1" /> : null })}
+          </g> })}
+          {monthLabels}
+          {cols('trend')}
+          {at('trend') !== null && <Tip x={cx(at('trend'))} y={tY(stackTotals[at('trend')])} lines={[mname(at('trend')), ...stacks[at('trend')].filter(d => d.value > 0).map(d => nameOf(d.id) + ': ' + mk(d.value)), 'Total: ' + mk(stackTotals[at('trend')])]} />}
+        </svg></Hide>
+        <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">{[...top, ...(stacks.some(p => p.some(d => d.id === 'other')) ? ['other'] : [])].map(id => <span key={id}><i className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: hue(id) }} />{nameOf(id)}</span>)}</p>
+      </Card>}
       <Card className="lg:col-span-2">
         <h3 className="mb-3 font-semibold">Spending by category · {monthName(key)}</h3>
         {!st.byCat.length ? <p className="text-sm text-slate-500">No spending in this month.</p> : <Bars data={st.byCat} />}
@@ -779,7 +893,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.9'
+const APP_VERSION = '1.0.4'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1348,7 +1462,7 @@ function Sprout({ onLock }) {
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
         {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
-        {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} biz={biz} onReport={k => needPin({ report: k })} />}
+        {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} budgets={spaceBudgets} biz={biz} onReport={k => needPin({ report: k })} />}
         {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
         {tab === 'plan' && !biz && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={spaceBudgets} txs={spaceTxs} pockets={spacePockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
