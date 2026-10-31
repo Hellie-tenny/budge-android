@@ -21,6 +21,8 @@ jobs:
       - run: npm run build
       - run: npx cap add android
       - run: npx cap sync android
+      - name: Allow notifications on Android 13 and newer
+        run: grep -q POST_NOTIFICATIONS android/app/src/main/AndroidManifest.xml || sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' android/app/src/main/AndroidManifest.xml
       - name: Use the Sprout app icon and splash screen
         run: cp -r branding/res/. android/app/src/main/res/
 

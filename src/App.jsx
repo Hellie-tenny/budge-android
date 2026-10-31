@@ -5,7 +5,7 @@ import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
 import Logo from './Logo.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
-import { isNative, shareFile, onBackButton, exitApp, onAppState } from './native.js'
+import { isNative, shareFile, onBackButton, exitApp, onAppState, notify, monthReminders } from './native.js'
 import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
 import { getMeta, putMeta, deleteCloudData, syncMessage } from './syncCloud.js'
 import { useSync } from './useSync.js'
@@ -229,15 +229,16 @@ function Insights({ txs, pockets }) {
   )
 }
 
-function Budgets({ budgets, setBudgets, txs, onManage }) {
+function Budgets({ budgets, setBudgets, txs, onManage, remind, setRemind }) {
   const { active } = useCats()
   const spent = c => txs.filter(t => t.type === 'out' && t.category === c && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
   return (
     <div className="space-y-3 lg:grid lg:grid-cols-2 lg:items-start lg:gap-4 lg:space-y-0">
       <div className="flex items-center justify-between gap-3 lg:col-span-2">
-        <p className="text-sm text-slate-500">Set a monthly limit for each category. Leave it empty for no limit.</p>
+        <p className="text-sm text-slate-500">Set a monthly limit for each category. It repeats every month until you change it. Leave it empty for no limit.</p>
         <button onClick={onManage} className="shrink-0 text-sm font-semibold text-azure">Edit categories</button>
       </div>
+      {isNative() && <label className="flex items-center justify-between gap-3 rounded-2xl bg-surface p-3 text-sm lg:col-span-2"><span>Remind me at the start of each month</span><input type="checkbox" checked={remind} onChange={e => setRemind(e.target.checked)} className="h-5 w-5 accent-azure" /></label>}
       {active('out').map(({ id: c, name, color }) => {
         const lim = budgets[c] || 0, s = spent(c), pct = lim ? Math.min(100, (s / lim) * 100) : 0, bad = lim && s > lim
         return (
@@ -695,7 +696,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.4'
+const APP_VERSION = '1.0.5'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -875,6 +876,7 @@ function BackupSheet({ data, onBackedUp, onRestore, onClose }) {
         if (r === 'cancelled') { setErr('The backup was not saved.'); setBusy(false); return }
       } else download(name, text)
       onBackedUp(new Date().toISOString()); setMode('done')
+      notify('Backup complete', `${name} is ready. Keep it somewhere safe.`) // not awaited, so a permission prompt never blocks the sheet
     } catch { setErr('Could not create the backup.') }
     setBusy(false)
   }
@@ -1097,6 +1099,31 @@ function Sprout({ onLock }) {
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
   const [sync, setSync] = useStore('budgie.sync', null) // { uid, key, sat, map, last } while sync is on; saved like the rest of the data
   const [notice, setNotice] = useState('')
+  // A new month: say so the first time the app is opened in it, and point to Budgets. Nothing is shown on a fresh install.
+  const [monthSeen, setMonthSeen] = useStore('budgie.monthSeen', '')
+  const [newMonth, setNewMonth] = useState('')
+  const seenRef = useRef(monthSeen)
+  useEffect(() => {
+    const check = () => {
+      if (document.hidden) return
+      const cur = monthKey(new Date())
+      if (seenRef.current === cur) return
+      if (seenRef.current) setNewMonth(new Date().toLocaleDateString('en-GB', { month: 'long' }))
+      seenRef.current = cur; setMonthSeen(cur)
+    }
+    check()
+    document.addEventListener('visibilitychange', check)
+    const off = onAppState(active => { if (active) check() })
+    return () => { document.removeEventListener('visibilitychange', check); off() }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Android: the "new month" notifications. The permission is asked for the first time the Budgets tab is opened.
+  const [monthRemind, setMonthRemind] = useStore('budgie.monthRemind', true)
+  const onBudgets = tab === 'budgets'
+  useEffect(() => {
+    if (!isNative()) return
+    monthReminders(monthRemind, onBudgets)
+    return onAppState(active => { if (active) monthReminders(monthRemind, false) })
+  }, [monthRemind, onBudgets])
   const [tour, setTour] = useState(() => { try { return !tourSeen() && !vaultGet('budgie.txs', []).length } catch { return false } }) // shown once, and only to someone with no transactions yet
   const endTour = () => { tourDone(); setTour(false); setTab('home') }
   const [user, setUser] = useState(null)
@@ -1217,11 +1244,12 @@ function Sprout({ onLock }) {
       </header>
       <main className="flex-1 overflow-y-auto px-4 pb-36 lg:px-10 lg:pb-10">
         <div className="mx-auto w-full lg:max-w-6xl">
+        {newMonth && <div className="mb-3 flex items-center gap-3 rounded-2xl bg-azure/10 p-3 text-sm text-azure"><span className="flex-1">{Object.values(budgets).some(v => v > 0) ? `It's ${newMonth}. Your limits carried over: check they still fit.` : `It's ${newMonth}. Set a budget to see how much you can spend each day.`}</span><button onClick={() => { setNewMonth(''); setTab('budgets') }} className="font-semibold">Budgets</button><button onClick={() => setNewMonth('')} aria-label="Dismiss" className="px-1 opacity-70">✕</button></div>}
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
         {tab === 'home' && <Home pockets={pockets} txs={sorted} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
-        {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} />}
+        {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
         {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
       </main>

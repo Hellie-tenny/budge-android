@@ -50,3 +50,49 @@ export const onBackButton = fn => listen('backButton', fn)
 export const exitApp = () => plugin('App')?.exitApp?.()
 // Fires with true when the app comes to the front and false when it goes to the background.
 export const onAppState = fn => listen('appStateChange', e => fn(!!e?.isActive))
+
+// Shows a notification right now. Returns true if one was shown, false if the person said no or it is not supported.
+// Keep the text free of amounts and names: it can appear on the lock screen.
+export async function notify(title, body) {
+  const ln = plugin('LocalNotifications')
+  try {
+    if (ln) {
+      let p = await ln.checkPermissions()
+      if (p.display !== 'granted') p = await ln.requestPermissions()
+      if (p.display !== 'granted') return false
+      await ln.schedule({ notifications: [{ id: Date.now() % 2147483647, title, body }] })
+      return true
+    }
+    if (isNative() || !('Notification' in window)) return false // in the Android app without the plugin there is nothing to fall back to
+    if (Notification.permission === 'default') await Notification.requestPermission()
+    if (Notification.permission !== 'granted') return false
+    const reg = await navigator.serviceWorker?.getRegistration?.() // Chrome on Android only allows notifications through the service worker
+    reg ? await reg.showNotification(title, { body }) : new Notification(title, { body })
+    return true
+  } catch { return false }
+}
+
+// "A new month has begun" reminders, 9:00 on the 1st of each of the next six months (Android app only).
+// Call it again whenever the app opens: it replaces the old set, so the six months ahead never run out.
+// With on = false it just cancels them. It only asks for permission when ask is true. Returns true if they are scheduled.
+const MONTH_IDS = [9001, 9002, 9003, 9004, 9005, 9006]
+export async function monthReminders(on, ask = false) {
+  const ln = plugin('LocalNotifications')
+  if (!ln) return false
+  try {
+    await ln.cancel({ notifications: MONTH_IDS.map(id => ({ id })) })
+    if (!on) return false
+    let p = await ln.checkPermissions()
+    if (ask && /^prompt/.test(p.display)) p = await ln.requestPermissions()
+    if (p.display !== 'granted') return false
+    const now = new Date()
+    await ln.schedule({
+      notifications: MONTH_IDS.map((id, i) => {
+        const at = new Date(now.getFullYear(), now.getMonth() + 1 + i, 1, 9, 0, 0)
+        const name = at.toLocaleDateString('en-GB', { month: 'long' })
+        return { id, title: `It's ${name}`, body: `A new month has begun. Set or review your budget for ${name}.`, schedule: { at, allowWhileIdle: true } }
+      }),
+    })
+    return true
+  } catch { return false }
+}
