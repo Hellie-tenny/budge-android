@@ -24,6 +24,20 @@ const DEFAULT_CATS = [
   { id: 'Business', name: 'Business', color: '#0ca678', kind: 'in' },
   { id: 'Gift', name: 'Gift', color: '#f59f00', kind: 'in' },
 ]
+// Business categories. They are saved with the rest of the categories but carry space: 'business', so they never show up in Personal.
+// Fixed ids, so two devices that add them separately end up with one copy.
+const BIZ_CATS = [
+  { id: 'b-sales', name: 'Sales', color: '#0ca678', kind: 'in', emoji: '🛒', space: 'business' },
+  { id: 'b-services', name: 'Services', color: '#42a542', kind: 'in', emoji: '🧰', space: 'business' },
+  { id: 'b-stock', name: 'Stock', color: '#e8590c', kind: 'out', emoji: '📦', space: 'business' },
+  { id: 'b-rent', name: 'Rent', color: '#e03131', kind: 'out', emoji: '🏠', space: 'business' },
+  { id: 'b-transport', name: 'Transport', color: '#1c7ed6', kind: 'out', emoji: '🚌', space: 'business' },
+  { id: 'b-wages', name: 'Wages', color: '#9c36b5', kind: 'out', emoji: '👥', space: 'business' },
+  { id: 'b-airtime', name: 'Airtime and data', color: '#7048e8', kind: 'out', emoji: '📱', space: 'business' },
+  { id: 'b-utilities', name: 'Utilities', color: '#f59f00', kind: 'out', emoji: '💡', space: 'business' },
+  { id: 'b-marketing', name: 'Marketing', color: '#d6336c', kind: 'out', emoji: '📣', space: 'business' },
+  { id: 'b-other', name: 'Other', color: '#868e96', kind: 'both', emoji: '🧾', space: 'business' },
+]
 const SYSTEM = { Savings: { id: 'Savings', name: 'Savings', color: '#f59f00' }, Transfer: { id: 'Transfer', name: 'Transfer', color: '#3d7ddd' } }
 const EMO = { Food: '🍲', Transport: '🚌', Airtime: '📱', Bills: '💡', Shopping: '🛍️', Health: '💊', Other: '🧾', Salary: '💼', Business: '🏪', Gift: '🎁', Savings: '🎯', Transfer: '🔁' }
 const PALETTE = ['#e8590c', '#1c7ed6', '#9c36b5', '#e03131', '#d6336c', '#2f9e44', '#f59f00', '#0ca678', '#7048e8', '#868e96']
@@ -120,11 +134,11 @@ function Donut({ data }) {
   )
 }
 
-function Home({ pockets, txs, budgets, setTab, onAccount }) {
+function Home({ pockets, txs, budgets, biz, setTab, onAccount }) {
   const { get } = useCats()
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const m = txs.filter(t => month(t.date) === thisMonth())
-  const inc = m.filter(t => t.type === 'in').reduce((a, t) => a + t.amount, 0)
+  const inc = m.filter(t => t.type === 'in' && !(biz && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0) // a business's opening balance is not a sale
   const spent = m.filter(t => t.type === 'out')
   const out = spent.reduce((a, t) => a + t.amount, 0)
   const byCat = [...new Set(spent.map(t => t.category))].map(id => ({ id, name: get(id).name, color: get(id).color, value: spent.filter(t => t.category === id).reduce((a, t) => a + t.amount, 0) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
@@ -136,13 +150,15 @@ function Home({ pockets, txs, budgets, setTab, onAccount }) {
   return (
     <div className="space-y-4 lg:grid lg:grid-cols-2 lg:items-start lg:gap-5 lg:space-y-0">
       <section data-tour="balance" className="pt-1 lg:order-1 lg:col-span-2">
-        <p className="text-sm text-slate-500">Total balance</p>
+        <p className="text-sm text-slate-500">{biz ? 'Business balance' : 'Total balance'}</p>
         <p className="text-5xl font-bold leading-tight tracking-tight">{mk(total)}</p>
         <p className="mt-1 text-sm text-slate-500"><span className="font-semibold text-up">+{mk(inc)}</span> in · <span className="font-semibold">-{mk(out)}</span> out this month</p>
+        {biz && <p className="mt-1 text-sm text-slate-500">Profit this month: <span className={'font-semibold ' + (inc >= out ? 'text-up' : 'text-down')}>{mk(inc - out)}</span></p>}
         {limit > 0 && <p className="mt-3 inline-block rounded-full bg-azure/10 px-3 py-1.5 text-sm font-medium text-azure">{used >= limit ? 'Budget used up for this month' : `${mk((limit - used) / left)} a day to stay on budget`}</p>}
       </section>
       <Card className="py-2 lg:order-3">
         {pockets.map((p, i) => <div key={p.id} className="flex items-center gap-3 py-3"><span className="h-3 w-3 rounded-full" style={{ background: PC[i % 5] }} /><span className="flex-1">{p.name}</span><span className="font-semibold">{mk(p.balance)}</span></div>)}
+        {biz && !pockets.length && <p className="py-3 text-sm text-slate-500">Add an account for your business money, like a till, a bank account or mobile money. Then record sales and expenses.</p>}
         <button onClick={onAccount} className="w-full border-t border-black/5 pt-3 text-left text-sm font-semibold text-azure dark:border-white/5">+ Add account</button>
       </Card>
       {over.length > 0 && <div className="rounded-2xl bg-down/10 p-3 text-sm text-down lg:order-2 lg:col-span-2">Over budget: {over.map(c => get(c).name).join(', ')}</div>}
@@ -370,7 +386,7 @@ function ManageCats({ onAdd, onEdit, onDrop, onClose }) {
       <Sheet onClose={onClose}>
         <CatForm init={c} onCancel={() => setEditing(null)} onSave={x => { (c.id ? onEdit : onAdd)(x); setEditing(null) }}
           deleteLabel={n ? 'Hide category' : 'Delete category'}
-          onDelete={c.id && c.id !== 'Other' ? () => {
+          onDelete={c.id && c.id !== 'Other' && c.id !== 'b-other' ? () => {
             const ok = confirm(n ? `"${c.name}" is used by ${n} transaction${n > 1 ? 's' : ''}. It will be hidden from the pickers, but your history stays. Hide it?` : `Delete "${c.name}"?`)
             if (ok) { onDrop(c.id); setEditing(null) }
           } : null} />
@@ -405,14 +421,16 @@ function FundSheet({ goal, pockets, onSave, onClose }) {
   )
 }
 
-function AccountSheet({ onSave, onClose }) {
+function AccountSheet({ taken, onSave, onClose }) {
   const [name, setName] = useState(''), [bal, setBal] = useState('')
+  const dup = taken.includes(name.trim().toLowerCase()) // transactions find their account by name, so every name is used once, across Personal and Business
   return (
     <Sheet onClose={onClose}>
       <h3 className="text-center font-semibold">New account</h3>
       <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Name, e.g. Savings box" className={field} />
       <input type="number" inputMode="numeric" value={bal} onChange={e => setBal(e.target.value)} placeholder="Current balance (MK)" className={field} />
-      <Save off={!name.trim()} onClick={() => onSave(name.trim(), Number(bal) || 0)}>Add account</Save>
+      {dup && <p className="text-sm text-down">You already have an account with that name.</p>}
+      <Save off={!name.trim() || dup} onClick={() => onSave(name.trim(), Number(bal) || 0)}>Add account</Save>
     </Sheet>
   )
 }
@@ -696,7 +714,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.0.5'
+const APP_VERSION = '1.0.6'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -825,6 +843,7 @@ function AboutSheet({ onTour, onClose }) {
           <Part title="Optional account">Signing in with Google or an email and password identifies you and is needed for sync. We keep only your sign-in details (your email address), handled by Google Firebase Authentication.</Part>
           <Part title="Optional sync">If you turn on sync, your budget is encrypted on your device with a key that only your sync passphrase or recovery code can open, then stored in Google Firebase. The server holds scrambled data and cannot read it, and the people who run Sprout cannot either. If you forget your passphrase and lose your recovery code, your synced copy cannot be recovered, though the data on your devices is not affected.</Part>
           <Part title="PIN lock">If you set a PIN, your data is encrypted on the device. If you forget the PIN and lose your recovery code, the data cannot be opened, so keep the recovery code safe.</Part>
+          <Part title="Business">Switch to Business at the top to keep a business's money apart. Business accounts, categories, budgets and totals never mix with your personal ones. Each account name can be used only once.</Part>
           <Part title="Backups">Back up from More, then Backup and restore. A backup is a file you keep yourself, and you can protect it with a password. Backups are the only way to move your data to a new phone for now.</Part>
           <Part title="Deleting your data">Clearing the app's storage or uninstalling Sprout removes the data on the device. You can delete your synced data, or your whole account, yourself at any time from More, then Sync or Account. Deleting your account also deletes your synced data.</Part>
         </div>
@@ -989,7 +1008,7 @@ function RecurSheet({ rules, pockets, onSave, onDelete, onNeedPin, onClose }) {
           )
         })}
       </div>
-      <Save onClick={() => setEditing({ type: 'out' })}>New recurring</Save>
+      {pockets.length ? <Save onClick={() => setEditing({ type: 'out' })}>New recurring</Save> : <p className="text-center text-sm text-slate-500">Add an account first.</p>}
     </Sheet>
   )
 }
@@ -1130,6 +1149,17 @@ function Sprout({ onLock }) {
   useEffect(() => watchUser(setUser), [])
   // Balances and saved amounts are worked out from the transactions, never stored.
   const pockets = withBalances(rawPockets, txs), goals = withSaved(rawGoals, txs)
+  // Personal and Business. An account belongs to one space (business ones carry space: 'business'), and a transaction
+  // belongs to the space of its account. Everything on screen is worked out from the current space's accounts and transactions.
+  const [space, setSpace] = useStore('budgie.space', 'personal')
+  const biz = space === 'business'
+  const bizNames = new Set(rawPockets.filter(p => p.space === 'business').map(p => p.name))
+  const inSpace = t => bizNames.has(t.pocket) === biz
+  const spacePockets = pockets.filter(p => (p.space === 'business') === biz), spaceTxs = txs.filter(inSpace)
+  const switchSpace = k => { setSpace(k); if (k === 'business' && tab === 'plan') setTab('home') } // goals and shopping lists are personal
+  useEffect(() => { // the first time Business is opened it gets its starter categories
+    if (biz && !cats.some(c => c.space === 'business')) setCats(cs => [...cs, ...BIZ_CATS])
+  }, [biz, cats]) // eslint-disable-line react-hooks/exhaustive-deps
   const setGoalsStored = v => setGoals(prev => (typeof v === 'function' ? v(withSaved(prev, txs)) : v).map(({ saved, ...g }) => ({ ...g, base: g.base ?? 0 })))
   useEffect(() => { // data saved by older versions is converted once; the numbers on screen do not change
     if (legacyPockets(rawPockets)) setPockets(migratePockets(rawPockets, txs))
@@ -1142,10 +1172,13 @@ function Sprout({ onLock }) {
   const uses = {}
   txs.forEach(t => { uses[t.category] = (uses[t.category] || 0) + 1 })
   const byId = new Map(cats.map(c => [c.id, c]))
-  const active = kind => cats.filter(c => !c.archived && (c.kind === kind || c.kind === 'both'))
-  const catApi = { list: cats, active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id: id || 'Other', name: id || 'Other', color: '#868e96' } }
-  const sorted = [...txs].sort((a, b) => b.date.localeCompare(a.date)) // newest first, even when backdated
-  const addCat = c => setCats(cs => [...cs, c])
+  const inCats = c => (c.space === 'business') === biz
+  const active = kind => cats.filter(c => inCats(c) && !c.archived && (c.kind === kind || c.kind === 'both'))
+  const catApi = { list: cats.filter(inCats), active, pick: kind => active(kind).sort((a, b) => (uses[b.id] || 0) - (uses[a.id] || 0)), uses: id => uses[id] || 0, get: id => byId.get(id) || SYSTEM[id] || { id: id || 'Other', name: id || 'Other', color: '#868e96' } }
+  const spaceBudgets = Object.fromEntries(Object.entries(budgets).filter(([c]) => (byId.get(c)?.space === 'business') === biz))
+  const setSpaceBudgets = v => setBudgets({ ...Object.fromEntries(Object.entries(budgets).filter(([c]) => (byId.get(c)?.space === 'business') !== biz)), ...v })
+  const sorted = [...spaceTxs].sort((a, b) => b.date.localeCompare(a.date)) // newest first, even when backdated
+  const addCat = c => setCats(cs => [...cs, biz ? { ...c, space: 'business' } : c])
   const editCat = c => setCats(cs => cs.map(x => x.id === c.id ? c : x))
   const dropCat = id => { // used categories are hidden (history keeps working), unused ones are deleted
     const used = txs.some(t => t.category === id)
@@ -1155,6 +1188,7 @@ function Sprout({ onLock }) {
   const save = t => { setTxs(x => [t, ...x]); setSheet(null) }
   const del = t => { setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)) }
   const update = (o, t) => { setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
+  const openAdd = () => setSheet(spacePockets.length ? 'add' : 'account') // a transaction needs an account, so a space with none starts there
   const needPin = next => setSheet(mask.on ? { pin: next } : next) // sheets that show real amounts ask for the PIN first while amounts are hidden
   const buy = t => {
     if (t.other) { setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: true, paid: t.amount } : i)); setSheet(null); return } // other money: nothing is recorded in the accounts
@@ -1177,8 +1211,8 @@ function Sprout({ onLock }) {
   }
   const fund = t => save(t)
   const addAccount = (name, bal) => {
-    setPockets(ps => [...ps, { id: uid(), name, opening: 0 }])
-    if (bal) save({ id: uid(), type: 'in', amount: bal, pocket: name, category: 'Other', note: 'Opening balance', date: new Date().toISOString() })
+    setPockets(ps => [...ps, { id: uid(), name, opening: 0, ...(biz ? { space: 'business' } : {}) }])
+    if (bal) save({ id: uid(), type: 'in', amount: bal, pocket: name, category: biz ? 'b-other' : 'Other', note: 'Opening balance', date: new Date().toISOString() })
     setSheet(null)
   }
   // Recurring: posts every occurrence that has come due. recRef is updated at once, so running it twice never double-posts.
@@ -1233,8 +1267,8 @@ function Sprout({ onLock }) {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] lg:px-10 lg:pb-4 lg:pt-8">
         <div>
-          <p className="text-sm text-slate-500">{tab === 'home' ? greet : 'Sprout'}</p>
-          <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? 'Your money' : TABS.find(t => t[0] === tab)[1]}</h1>
+          <p className="text-sm text-slate-500">{tab === 'home' ? greet : biz ? 'Sprout Business' : 'Sprout'}</p>
+          <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? (biz ? 'Your business' : 'Your money') : TABS.find(t => t[0] === tab)[1]}</h1>
         </div>
         <div className="flex gap-2 text-slate-500">
           {pinSet && <button onClick={() => revealed ? setRevealed(false) : setSheet('reveal')} aria-label={revealed ? 'Hide amounts' : 'Show amounts'} className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k={revealed ? 'eye' : 'eyeOff'} /></button>}
@@ -1242,41 +1276,42 @@ function Sprout({ onLock }) {
           <button data-tour="more" onClick={() => setSheet('more')} aria-label="More" className="grid h-10 w-10 place-items-center rounded-full bg-surface"><Icon k="more" /></button>
         </div>
       </header>
+      <div className="px-5 pb-2 lg:px-10"><div className="grid grid-cols-2 gap-1 rounded-2xl bg-surface p-1 lg:max-w-xs">{[['personal', 'Personal'], ['business', 'Business']].map(([k, l]) => <button key={k} onClick={() => switchSpace(k)} className={'rounded-xl py-2 text-sm font-semibold ' + (space === k ? 'bg-azure text-white' : 'text-slate-500')}>{l}</button>)}</div></div>
       <main className="flex-1 overflow-y-auto px-4 pb-36 lg:px-10 lg:pb-10">
         <div className="mx-auto w-full lg:max-w-6xl">
         {newMonth && <div className="mb-3 flex items-center gap-3 rounded-2xl bg-azure/10 p-3 text-sm text-azure"><span className="flex-1">{Object.values(budgets).some(v => v > 0) ? `It's ${newMonth}. Your limits carried over: check they still fit.` : `It's ${newMonth}. Set a budget to see how much you can spend each day.`}</span><button onClick={() => { setNewMonth(''); setTab('budgets') }} className="font-semibold">Budgets</button><button onClick={() => setNewMonth('')} aria-label="Dismiss" className="px-1 opacity-70">✕</button></div>}
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
-        {tab === 'home' && <Home pockets={pockets} txs={sorted} budgets={budgets} setTab={setTab} onAccount={() => setSheet('account')} />}
+        {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
-        {tab === 'insights' && <Insights txs={txs} pockets={pockets} />}
-        {tab === 'budgets' && <Budgets budgets={budgets} setBudgets={setBudgets} txs={txs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
-        {tab === 'plan' && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={budgets} txs={txs} pockets={pockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
+        {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} />}
+        {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
+        {tab === 'plan' && !biz && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={spaceBudgets} txs={spaceTxs} pockets={spacePockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
       </main>
       </div>
-      <button data-tour="add" onClick={() => setSheet('add')} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
+      <button data-tour="add" onClick={openAdd} aria-label="Add transaction" className="lg:hidden fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-10 grid h-14 w-14 place-items-center rounded-full bg-azure text-3xl text-white shadow-lg shadow-azure/40 active:scale-95">+</button>
       <nav className="fixed inset-x-0 bottom-0 z-20 mx-auto flex max-w-md justify-around border-t border-black/5 bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-white/5 lg:static lg:order-first lg:mx-0 lg:w-64 lg:max-w-none lg:shrink-0 lg:flex-col lg:justify-start lg:gap-1 lg:overflow-y-auto lg:border-r lg:border-t-0 lg:px-4 lg:py-8 lg:backdrop-blur-none">
         <div className="hidden items-center gap-2 px-4 pb-6 lg:flex"><Logo size={36} /><p className="text-2xl font-bold text-navy">Sprout</p></div>
-        {TABS.map(([k, l]) => <button key={k} data-tour={'tab-' + k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
-        <button data-tour="add" onClick={() => setSheet('add')} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
+        {TABS.filter(([k]) => !(biz && k === 'plan')).map(([k, l]) => <button key={k} data-tour={'tab-' + k} onClick={() => setTab(k)} className={'flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-semibold lg:flex-none lg:flex-row lg:gap-3 lg:rounded-xl lg:px-4 lg:py-3 lg:text-sm lg:hover:bg-azure/10 ' + (tab === k ? 'text-azure lg:bg-azure/15' : 'text-slate-400')}><span className={'rounded-full px-4 py-1 lg:p-0 ' + (tab === k ? 'bg-azure/15 lg:bg-transparent' : '')}><Icon k={k} /></span>{l}</button>)}
+        <button data-tour="add" onClick={openAdd} className="mt-4 hidden rounded-2xl bg-azure py-3 font-semibold text-white shadow-lg shadow-azure/30 hover:brightness-110 lg:block">+ Add transaction</button>
       </nav>
-      {sheet === 'add' && <AddSheet pockets={pockets} txs={txs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
-      {sheet?.edit && <AddSheet edit={sheet.edit} pockets={pockets} txs={txs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
-      {sheet?.buyAll && <BuyListSheet plan={sheet.buyAll.plan} items={sheet.buyAll.items} pockets={pockets} onSave={buyAll} onClose={() => setSheet(null)} />}
-      {sheet?.buy && <BuySheet item={sheet.buy} pockets={pockets} date={shop.find(p => p.kind === 'plan' && p.id === (sheet.buy.planId || 'plan-main'))?.date} onSave={buy} onClose={() => setSheet(null)} />}
+      {sheet === 'add' && <AddSheet pockets={spacePockets} txs={spaceTxs} onSave={save} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet?.edit && <AddSheet edit={sheet.edit} pockets={spacePockets} txs={spaceTxs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
+      {sheet?.buyAll && <BuyListSheet plan={sheet.buyAll.plan} items={sheet.buyAll.items} pockets={spacePockets} onSave={buyAll} onClose={() => setSheet(null)} />}
+      {sheet?.buy && <BuySheet item={sheet.buy} pockets={spacePockets} date={shop.find(p => p.kind === 'plan' && p.id === (sheet.buy.planId || 'plan-main'))?.date} onSave={buy} onClose={() => setSheet(null)} />}
       {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
       {sheet === 'about' && <AboutSheet onTour={() => { setSheet(null); setTab('home'); setTour(true) }} onClose={() => setSheet(null)} />}
       {sheet === 'cloud' && <CloudSheet user={user} onSync={() => setSheet('sync')} onSignedOut={() => setSync(null)} onClose={() => setSheet(null)} />}
       {sheet === 'sync' && <SyncSheet user={user} sync={sync} status={syncer.status} pristine={pristine} onEnable={async (key, mode) => syncer.enable({ uid: user.uid, key: await exportSyncKey(key), sat: null, map: {}, last: '' }, mode)} onDisable={() => setSync(null)} onSyncNow={syncer.syncNow} onSignIn={() => setSheet('cloud')} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
-      {sheet === 'recurring' && <RecurSheet rules={recurring} pockets={pockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
+      {sheet === 'recurring' && <RecurSheet rules={recurring.filter(inSpace)} pockets={spacePockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
-      {sheet === 'account' && <AccountSheet onSave={addAccount} onClose={() => setSheet(null)} />}
+      {sheet === 'account' && <AccountSheet taken={rawPockets.map(p => p.name.trim().toLowerCase())} onSave={addAccount} onClose={() => setSheet(null)} />}
       {sheet?.pin !== undefined && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(sheet.pin) }} /></Sheet>}
       {sheet === 'reveal' && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(null) }} /></Sheet>}
       {sheet === 'security' && <SecuritySheet onClose={() => setSheet(null)} onChange={() => setPinSet(hasPin())} />}
       {tour && <Tour onTab={setTab} onDone={endTour} />}
-      {sheet?.fund && <FundSheet goal={sheet.fund} pockets={pockets} onSave={fund} onClose={() => setSheet(null)} />}
+      {sheet?.fund && <FundSheet goal={sheet.fund} pockets={spacePockets} onSave={fund} onClose={() => setSheet(null)} />}
     </div>
     </CatCtx.Provider>
   )
