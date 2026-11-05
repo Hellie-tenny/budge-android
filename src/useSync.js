@@ -37,7 +37,7 @@ export function useSync({ user, sync, setSync, local, apply }) {
     if (!enabled) return
     const t = setTimeout(() => run(), 4000)
     return () => clearTimeout(t)
-  }, [enabled, run, local.pockets, local.txs, local.goals, local.cats, local.shop, local.recurring, local.budgets, local.tombs])
+  }, [enabled, run, local.pockets, local.txs, local.goals, local.cats, local.shop, local.recurring, local.loans, local.loanPays, local.budgets, local.tombs])
   useEffect(() => {
     if (!enabled) return
     const f = () => { if (document.visibilityState !== 'visible') return; run() }

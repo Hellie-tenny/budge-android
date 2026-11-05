@@ -89,7 +89,7 @@ export async function openRecord(key, env) {
 export const sealTomb = t => ({ c: t.c, id: t.id, u: t.at, del: true })
 export const openTomb = env => ({ c: env.c, id: env.id, at: env.u })
 
-export const COLLECTIONS = ['pockets', 'txs', 'goals', 'cats', 'shop', 'recurring']
+export const COLLECTIONS = ['pockets', 'txs', 'goals', 'cats', 'shop', 'recurring', 'loans', 'loanPays']
 
 // All of a person's data as envelopes. data = { pockets, txs, goals, cats, shop, recurring, budgets, tombs }.
 export async function sealAll(key, data) {

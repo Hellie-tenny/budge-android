@@ -1,9 +1,10 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd, paceSeries } from './logic.js'
+import { loanTx, ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd, paceSeries } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
 import Logo from './Logo.jsx'
+import { LoansSheet, LoanHomeCard } from './Loans.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
 import { isNative, shareFile, onBackButton, exitApp, onAppState, notify, monthReminders } from './native.js'
 import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
@@ -38,7 +39,7 @@ const BIZ_CATS = [
   { id: 'b-marketing', name: 'Marketing', color: '#d6336c', kind: 'out', emoji: '📣', space: 'business' },
   { id: 'b-other', name: 'Other', color: '#868e96', kind: 'both', emoji: '🧾', space: 'business' },
 ]
-const SYSTEM = { Savings: { id: 'Savings', name: 'Savings', color: '#f59f00' }, Transfer: { id: 'Transfer', name: 'Transfer', color: '#3d7ddd' } }
+const SYSTEM = { Savings: { id: 'Savings', name: 'Savings', color: '#f59f00' }, Transfer: { id: 'Transfer', name: 'Transfer', color: '#3d7ddd' }, Loan: { id: 'Loan', name: 'Loan', color: '#7048e8', emoji: '🤝' } }
 const EMO = { Food: '🍲', Transport: '🚌', Airtime: '📱', Bills: '💡', Shopping: '🛍️', Health: '💊', Other: '🧾', Salary: '💼', Business: '🏪', Gift: '🎁', Savings: '🎯', Transfer: '🔁' }
 const PALETTE = ['#e8590c', '#1c7ed6', '#9c36b5', '#e03131', '#d6336c', '#2f9e44', '#f59f00', '#0ca678', '#7048e8', '#868e96']
 const QUICK_EMOJI = ['🍲', '🚌', '📱', '💡', '🛍️', '💊', '🎓', '🏠', '🐾', '🎮', '☕', '🧴']
@@ -115,7 +116,7 @@ function TxRow({ t, onDelete, onEdit }) {
       <div className="text-right">
         <p className={'font-semibold ' + (t.type === 'in' ? 'text-up' : t.type === 'out' ? '' : 'text-azure')}>{t.type === 'in' ? '+' : t.type === 'out' ? '-' : ''}{mk(t.amount)}</p>
         {(onDelete || onEdit) && <div className="flex justify-end gap-3 text-xs">
-          {onEdit && t.type !== 'sv' && <button className="text-azure" onClick={() => onEdit(t)}>Edit</button>}
+          {onEdit && t.type !== 'sv' && !t.loanId && <button className="text-azure" onClick={() => onEdit(t)}>Edit</button>}
           {onDelete && <button className="text-down" onClick={() => confirm('Delete this transaction?') && onDelete(t)}>Delete</button>}
         </div>}
       </div>
@@ -134,15 +135,15 @@ function Donut({ data }) {
   )
 }
 
-function Home({ pockets, txs, budgets, biz, setTab, onAccount }) {
+function Home({ pockets, txs, budgets, biz, setTab, onAccount, loanCard }) {
   const { get } = useCats()
   const total = pockets.reduce((a, p) => a + p.balance, 0)
   const m = txs.filter(t => month(t.date) === thisMonth())
-  const inc = m.filter(t => t.type === 'in' && t.note !== 'Opening balance').reduce((a, t) => a + t.amount, 0) // an account's opening balance is not income
-  const spent = m.filter(t => t.type === 'out')
+  const inc = m.filter(t => t.type === 'in' && t.note !== 'Opening balance' && !t.loanId).reduce((a, t) => a + t.amount, 0) // an account's opening balance and loan money are not income
+  const spent = m.filter(t => t.type === 'out' && !t.loanId)
   const out = spent.reduce((a, t) => a + t.amount, 0)
   const byCat = [...new Set(spent.map(t => t.category))].map(id => ({ id, name: get(id).name, color: get(id).color, value: spent.filter(t => t.category === id).reduce((a, t) => a + t.amount, 0) })).filter(d => d.value > 0).sort((a, b) => b.value - a.value)
-  const lastOut = txs.filter(t => t.type === 'out' && month(t.date) === mKey(1)).reduce((a, t) => a + t.amount, 0)
+  const lastOut = txs.filter(t => t.type === 'out' && !t.loanId && month(t.date) === mKey(1)).reduce((a, t) => a + t.amount, 0)
   const over = Object.entries(budgets).filter(([c, l]) => l > 0 && (byCat.find(d => d.id === c)?.value || 0) > l).map(([c]) => c)
   const limit = Object.values(budgets).reduce((a, b) => a + b, 0)
   const used = Object.entries(budgets).filter(([, l]) => l > 0).reduce((a, [c]) => a + (byCat.find(d => d.id === c)?.value || 0), 0)
@@ -176,6 +177,7 @@ function Home({ pockets, txs, budgets, biz, setTab, onAccount }) {
         <div className="mb-1 flex items-center justify-between"><h3 className="font-semibold">Recent</h3><button onClick={() => setTab('activity')} className="text-sm font-semibold text-azure">See all</button></div>
         <div className="divide-y divide-black/5 dark:divide-white/5">{txs.slice(0, 4).map(t => <TxRow key={t.id} t={t} />)}</div>
       </Card>}
+      {loanCard}
     </div>
   )
 }
@@ -238,7 +240,7 @@ function Insights({ txs, pockets, budgets, biz, onReport }) {
   const [tip, setTip] = useState(null) // { c: which chart, i: which column } while one is hovered or tapped
   const months = [5, 4, 3, 2, 1, 0].map(o => { const d = new Date(); d.setDate(15); d.setMonth(d.getMonth() - o); return { key: monthKey(d), label: d.toLocaleString('en', { month: 'short' }) } })
   if (!txs.length) return <p className="mt-10 text-center text-slate-500">Add a few transactions and your charts will show up here.</p>
-  const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type && !(type === 'in' && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0)
+  const sum = (key, type) => txs.filter(t => month(t.date) === key && t.type === type && !t.loanId && !(type === 'in' && t.note === 'Opening balance')).reduce((a, t) => a + t.amount, 0)
   const data = months.map(m => ({ ...m, inc: sum(m.key, 'in'), out: sum(m.key, 'out') }))
   const max = Math.max(1, ...data.flatMap(d => [d.inc, d.out]))
   const total = pockets.reduce((a, p) => a + p.balance, 0)
@@ -496,7 +498,7 @@ function AddSheet({ pockets, txs, edit, onSave, onNewCat, onClose }) {
   const today = ymd(new Date())
   const bad = !(Number(amount) > 0) || (type === 'tr' && pocket === to) || !day || day > today
   const save = () => onSave({ ...(edit || {}), id: edit?.id || uid(), type, amount: Number(amount), pocket, ...(type === 'tr' ? { to, category: 'Transfer' } : { category, note }), date: toISO(day, edit?.date) })
-  const notes = [...new Set(txs.filter(t => t.type === type && t.note && t.note !== 'Opening balance').map(t => t.note))].slice(0, 20)
+  const notes = [...new Set(txs.filter(t => t.type === type && !t.loanId && t.note && t.note !== 'Opening balance').map(t => t.note))].slice(0, 20)
   const q = note.trim().toLowerCase(), hints = notes.filter(n => n.toLowerCase() !== q && n.toLowerCase().includes(q)).slice(0, 6) // earlier notes, narrowed as you type; shown as chips above the field so the keyboard never covers them
   const opts = pick(type), shown = type !== 'tr' && !opts.some(c => c.id === category) ? [get(category), ...opts] : opts // keep a hidden category visible while editing its transaction
   if (adding) return <Sheet onClose={() => setAdding(false)}><CatForm init={{ kind: type }} fixedKind onCancel={() => setAdding(false)} onSave={c => { onNewCat(c); setCategory(c.id); setAdding(false) }} /></Sheet>
@@ -893,7 +895,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.1.0'
+const APP_VERSION = '1.1.'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1040,6 +1042,7 @@ function MoreSheet({ lastBackup, user, syncOn, onPick, onClose }) {
     ['sync', 'Sync', syncOn ? 'On: your data is kept up to date on your devices' : 'Keep your data on all your devices, encrypted'],
     ['backup', 'Backup and restore', lastBackup ? 'Last backup ' + new Date(lastBackup).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No backup yet'],
     ['recurring', 'Recurring transactions', 'Rent, salary, regular top-ups'],
+    ['loans', 'Loans', 'Money you owe and money owed to you'],
     ['cats', 'Categories', 'Add, rename or hide'],
     ['about', 'About Sprout', 'Version, privacy and how your data is kept'],
   ]
@@ -1254,7 +1257,7 @@ function Tour({ onTab, onDone }) {
 }
 
 const TABS = [['home', 'Home'], ['activity', 'Activity'], ['insights', 'Insights'], ['budgets', 'Budgets'], ['plan', 'Plan']]
-const ICONS = { person: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z', biz: 'M4 7h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16', cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', sync: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
+const ICONS = { loans: 'M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6', person: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8z', biz: 'M4 7h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16', cloud: 'M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z', backup: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3', recurring: 'M17 2l4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3', sync: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16M8 16H3v5', about: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16v-4M12 8h.01', cats: 'M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.41l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 7.5h.01', home: 'M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z', activity: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', insights: 'M18 20V10M12 20V4M6 20v-6', budgets: 'M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10z', plan: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11', more: 'M5 12h.01M12 12h.01M19 12h.01', eye: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', eyeOff: 'M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22', lock: 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4' }
 const Icon = ({ k }) => <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={ICONS[k]} /></svg>
 
 function Sprout({ onLock }) {
@@ -1294,6 +1297,8 @@ function Sprout({ onLock }) {
   const [cats, setCats, setCatsRaw] = useStore('budgie.cats', DEFAULT_CATS, gone('cats'))
   const [shop, setShop, setShopRaw] = useStore('budgie.shop', [], gone('shop'))
   const [recurring, setRecurring, setRecurringRaw] = useStore('budgie.recurring', [], gone('recurring'))
+  const [loans, setLoans, setLoansRaw] = useStore('budgie.loans', [], gone('loans'))
+  const [loanPays, setLoanPays, setLoanPaysRaw] = useStore('budgie.loanPays', [], gone('loanPays'))
   const [lastBackup, setLastBackup] = useStore('budgie.lastBackup', null)
   const [sync, setSync] = useStore('budgie.sync', null) // { uid, key, sat, map, last } while sync is on; saved like the rest of the data
   const [notice, setNotice] = useState('')
@@ -1357,6 +1362,7 @@ function Sprout({ onLock }) {
   const spaceBudgets = Object.fromEntries(Object.entries(budgets).filter(([c]) => (byId.get(c)?.space === 'business') === biz))
   const setSpaceBudgets = v => setBudgets({ ...Object.fromEntries(Object.entries(budgets).filter(([c]) => (byId.get(c)?.space === 'business') !== biz)), ...v })
   const sorted = [...spaceTxs].sort((a, b) => b.date.localeCompare(a.date)) // newest first, even when backdated
+  const spaceLoans = loans.filter(l => (l.space === 'business') === biz), loanIds = new Set(spaceLoans.map(l => l.id)), spaceLoanPays = loanPays.filter(p => loanIds.has(p.loanId))
   const addCat = c => setCats(cs => [...cs, biz ? { ...c, space: 'business' } : c])
   const editCat = c => setCats(cs => cs.map(x => x.id === c.id ? c : x))
   const dropCat = id => { // used categories are hidden (history keeps working), unused ones are deleted
@@ -1365,7 +1371,10 @@ function Sprout({ onLock }) {
     setBudgets(b => { const n = { ...b }; delete n[id]; return n })
   }
   const save = t => { setTxs(x => [t, ...x]); setSheet(null) }
-  const del = t => { setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i)) }
+  const del = t => {
+    setTxs(x => x.filter(y => y.id !== t.id)); if (t.shopId) setShop(items => items.map(i => i.id === t.shopId ? { ...i, done: false, txId: undefined } : i))
+    if (t.loanId) { setLoans(ls => ls.map(l => l.txId === t.id ? { ...l, txId: undefined } : l)); setLoanPays(ps => ps.map(p => p.txId === t.id ? { ...p, txId: undefined } : p)) } // the loan record stays; it just no longer points at an account entry
+  }
   const update = (o, t) => { setTxs(x => x.map(y => y.id === o.id ? t : y)); setSheet(null) }
   const openAdd = () => setSheet(spacePockets.length ? 'add' : 'account') // a transaction needs an account, so a space with none starts there
   const needPin = next => setSheet(mask.on ? { pin: next } : next) // sheets that show real amounts ask for the PIN first while amounts are hidden
@@ -1389,6 +1398,24 @@ function Sprout({ onLock }) {
     if (t) del(t); else setShop(items => items.map(x => x.id === i.id ? { ...x, done: false, txId: undefined, paid: undefined } : x))
   }
   const fund = t => save(t)
+  // Loans. A loan or payment can also be recorded in an account (pocket); that transaction carries loanId and is kept out of income and spending.
+  const addLoan = (fields, pocket) => {
+    const l = { ...fields, id: uid(), ...(biz ? { space: 'business' } : {}) }
+    if (pocket) { const t = loanTx(l, null, pocket, uid()); l.txId = t.id; setTxs(x => [t, ...x]) }
+    setLoans(ls => [...ls, l])
+  }
+  const addPay = (fields, pocket) => {
+    const loan = loans.find(l => l.id === fields.loanId), p = { ...fields, id: uid() }
+    if (!loan) return
+    if (pocket) { const t = loanTx(loan, p, pocket, uid()); p.txId = t.id; setTxs(x => [t, ...x]) }
+    setLoanPays(ps => [...ps, p])
+  }
+  const editLoan = l => setLoans(ls => ls.map(x => x.id === l.id ? l : x))
+  const dropPay = p => { if (p.txId) setTxs(x => x.filter(t => t.id !== p.txId)); setLoanPays(ps => ps.filter(x => x.id !== p.id)) }
+  const dropLoan = (l, undoMoney) => {
+    if (undoMoney) { const ids = new Set([l.txId, ...loanPays.filter(p => p.loanId === l.id).map(p => p.txId)].filter(Boolean)); setTxs(x => x.filter(t => !ids.has(t.id))) }
+    setLoanPays(ps => ps.filter(p => p.loanId !== l.id)); setLoans(ls => ls.filter(x => x.id !== l.id))
+  }
   const addAccount = (name, bal) => {
     setPockets(ps => [...ps, { id: uid(), name, opening: 0, ...(biz ? { space: 'business' } : {}) }])
     if (bal) save({ id: uid(), type: 'in', amount: bal, pocket: name, category: biz ? 'b-other' : 'Other', note: 'Opening balance', date: new Date().toISOString() })
@@ -1429,16 +1456,19 @@ function Sprout({ onLock }) {
     const m = migrateData(d) // backups from older versions are converted before anything else changes
     setPockets(m.pockets); setTxs(m.txs); setBudgets(m.budgets || {}); setGoals(m.goals); setCats(m.cats?.length ? m.cats : DEFAULT_CATS); setShop(m.shop || []); setTombs(m.tombs || [])
     recRef.current = d.recurring || []; setRecurring(recRef.current)
+    // Backups made before loans existed have no loans: keep the current ones, but unlink them from account entries the restore just replaced.
+    if (Array.isArray(d.loans)) { setLoans(d.loans); setLoanPays(Array.isArray(d.loanPays) ? d.loanPays : []) }
+    else { setLoans(ls => ls.map(({ txId, ...l }) => l)); setLoanPays(ps => ps.map(({ txId, ...p }) => p)) }
     setSheet(null); setNotice('Backup restored.'); runRec()
   }
-  const backupData = { pockets: rawPockets, txs, budgets, goals: rawGoals, cats, shop, recurring, tombs }
-  const syncLocal = { pockets: rawPockets, txs, goals: rawGoals, cats, shop, recurring, budgets, tombs, budgetsUpdatedAt: budgetsAt || (Object.keys(budgets).length ? '1970-01-01T00:00:00.000Z' : '') }
+  const backupData = { pockets: rawPockets, txs, budgets, goals: rawGoals, cats, shop, recurring, loans, loanPays, tombs }
+  const syncLocal = { pockets: rawPockets, txs, goals: rawGoals, cats, shop, recurring, loans, loanPays, budgets, tombs, budgetsUpdatedAt: budgetsAt || (Object.keys(budgets).length ? '1970-01-01T00:00:00.000Z' : '') }
   const applySync = m => {
     setPocketsRaw(m.pockets); setTxsRaw(m.txs); setGoalsRaw(m.goals); setCatsRaw(m.cats.length ? m.cats : DEFAULT_CATS); setShopRaw(m.shop)
-    recRef.current = m.recurring; setRecurringRaw(m.recurring); setTombs(m.tombs); setBudgetsRaw(m.budgets); setBudgetsAt(m.budgetsUpdatedAt || '')
+    recRef.current = m.recurring; setRecurringRaw(m.recurring); setLoansRaw(m.loans); setLoanPaysRaw(m.loanPays); setTombs(m.tombs); setBudgetsRaw(m.budgets); setBudgetsAt(m.budgetsUpdatedAt || '')
   }
   const syncer = useSync({ user, sync, setSync, local: syncLocal, apply: applySync })
-  const pristine = !txs.length && !rawGoals.length && !shop.length && !recurring.length && !Object.keys(budgets).length
+  const pristine = !txs.length && !rawGoals.length && !shop.length && !recurring.length && !loans.length && !Object.keys(budgets).length
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
   return (
     <CatCtx.Provider value={catApi}>
@@ -1460,7 +1490,7 @@ function Sprout({ onLock }) {
         <div className="mx-auto w-full lg:max-w-6xl">
         {newMonth && <div className="mb-3 flex items-center gap-3 rounded-2xl bg-azure/10 p-3 text-sm text-azure"><span className="flex-1">{Object.values(budgets).some(v => v > 0) ? `It's ${newMonth}. Your limits carried over: check they still fit.` : `It's ${newMonth}. Set a budget to see how much you can spend each day.`}</span>{spaceTxs.some(t => month(t.date) === prevMonthKey(thisMonth())) && <button onClick={() => { setNewMonth(''); needPin({ report: prevMonthKey(thisMonth()) }) }} className="font-semibold">Report</button>}<button onClick={() => { setNewMonth(''); setTab('budgets') }} className="font-semibold">Budgets</button><button onClick={() => setNewMonth('')} aria-label="Dismiss" className="px-1 opacity-70">✕</button></div>}
         {notice && <button onClick={() => setNotice('')} className="mb-3 w-full rounded-2xl bg-azure/10 p-3 text-left text-sm text-azure">{notice} <span className="float-right font-semibold">Dismiss</span></button>}
-        {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} />}
+        {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} loanCard={<LoanHomeCard loans={spaceLoans} pays={spaceLoanPays} onOpen={() => needPin('loans')} />} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} budgets={spaceBudgets} biz={biz} onReport={k => needPin({ report: k })} />}
         {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
@@ -1478,12 +1508,13 @@ function Sprout({ onLock }) {
       {sheet?.edit && <AddSheet edit={sheet.edit} pockets={spacePockets} txs={spaceTxs} onSave={t => update(sheet.edit, t)} onNewCat={addCat} onClose={() => setSheet(null)} />}
       {sheet?.buyAll && <BuyListSheet plan={sheet.buyAll.plan} items={sheet.buyAll.items} pockets={spacePockets} onSave={buyAll} onClose={() => setSheet(null)} />}
       {sheet?.buy && <BuySheet item={sheet.buy} pockets={spacePockets} date={shop.find(p => p.kind === 'plan' && p.id === (sheet.buy.planId || 'plan-main'))?.date} onSave={buy} onClose={() => setSheet(null)} />}
-      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
+      {sheet === 'more' && <MoreSheet lastBackup={lastBackup} user={user} syncOn={syncer.enabled} onPick={k => (k === 'backup' || k === 'loans' ? needPin(k) : setSheet(k))} onClose={() => setSheet(null)} />}
       {sheet === 'about' && <AboutSheet onTour={() => { setSheet(null); setTab('home'); setTour(true) }} onClose={() => setSheet(null)} />}
       {sheet === 'cloud' && <CloudSheet user={user} onSync={() => setSheet('sync')} onSignedOut={() => setSync(null)} onClose={() => setSheet(null)} />}
       {sheet === 'sync' && <SyncSheet user={user} sync={sync} status={syncer.status} pristine={pristine} onEnable={async (key, mode) => syncer.enable({ uid: user.uid, key: await exportSyncKey(key), sat: null, map: {}, last: '' }, mode)} onDisable={() => setSync(null)} onSyncNow={syncer.syncNow} onSignIn={() => setSheet('cloud')} onClose={() => setSheet(null)} />}
       {sheet === 'backup' && <BackupSheet data={backupData} onBackedUp={setLastBackup} onRestore={restore} onClose={() => setSheet(null)} />}
       {sheet === 'recurring' && <RecurSheet rules={recurring.filter(inSpace)} pockets={spacePockets} onSave={saveRule} onDelete={deleteRule} onNeedPin={() => setSheet({ pin: 'recurring' })} onClose={() => setSheet(null)} />}
+      {sheet === 'loans' && <LoansSheet loans={spaceLoans} pays={spaceLoanPays} pockets={spacePockets} onAdd={addLoan} onPay={addPay} onEdit={editLoan} onDropPay={dropPay} onDropLoan={dropLoan} onClose={() => setSheet(null)} />}
       {sheet === 'cats' && <ManageCats onAdd={addCat} onEdit={editCat} onDrop={dropCat} onClose={() => setSheet(null)} />}
       {sheet === 'account' && <AccountSheet taken={rawPockets.map(p => p.name.trim().toLowerCase())} onSave={addAccount} onClose={() => setSheet(null)} />}
       {sheet?.pin !== undefined && <Sheet onClose={() => setSheet(null)}><PinCheck hint="to show amounts" onOk={() => { setRevealed(true); setSheet(sheet.pin) }} /></Sheet>}

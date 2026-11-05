@@ -58,7 +58,7 @@ export function checkBackup(d) {
   if (!Array.isArray(d.pockets) || !d.pockets.length || d.pockets.some(p => !p || typeof p.name !== 'string' || typeof (p.opening ?? p.balance) !== 'number')) return 'The accounts in this file look wrong.'
   if (!Array.isArray(d.txs) || d.txs.some(t => !t || typeof t.amount !== 'number' || typeof t.date !== 'string' || typeof t.pocket !== 'string')) return 'The transactions in this file look wrong.'
   if (d.budgets != null && (typeof d.budgets !== 'object' || Array.isArray(d.budgets))) return 'The budgets in this file look wrong.'
-  for (const k of ['goals', 'cats', 'shop', 'recurring', 'tombs']) if (d[k] != null && !Array.isArray(d[k])) return `The ${k} in this file look wrong.`
+  for (const k of ['goals', 'cats', 'shop', 'recurring', 'loans', 'loanPays', 'tombs']) if (d[k] != null && !Array.isArray(d[k])) return `The ${k} in this file look wrong.`
   return ''
 }
 
@@ -116,7 +116,7 @@ export const recurringTxId = (rule, day) => `rec_${rule.id}_${day}`
 // Income and spending leave out transfers, money put into goals, and the opening balance of a new account.
 // Pass only the transactions of one space (Personal or Business).
 
-const isIncome = t => t.type === 'in' && t.note !== 'Opening balance'
+const isIncome = t => t.type === 'in' && t.note !== 'Opening balance' && !t.loanId // loan money moves balances but is not income
 const total = (list, f = () => true) => r2(list.reduce((a, t) => a + (f(t) ? t.amount : 0), 0))
 const byCategory = list => {
   const m = new Map()
@@ -129,12 +129,12 @@ export const monthName = (key, style = 'long') => new Date(+key.slice(0, 4), +ke
 
 export function monthStats(txs, key, today = new Date()) {
   const inM = txs.filter(t => monthKey(t.date) === key)
-  const income = total(inM, isIncome), outs = inM.filter(t => t.type === 'out'), spending = total(outs)
+  const income = total(inM, isIncome), outs = inM.filter(t => t.type === 'out' && !t.loanId), spending = total(outs)
   const nowKey = monthKey(today), [y, m] = key.split('-').map(Number)
   const days = key === nowKey ? today.getDate() : key < nowKey ? new Date(y, m, 0).getDate() : 0 // days that have passed, for the daily average
   return {
     key, income, spending, net: r2(income - spending), saved: total(inM, t => t.type === 'sv'),
-    count: inM.filter(t => isIncome(t) || t.type === 'out').length,
+    count: inM.filter(t => isIncome(t) || (t.type === 'out' && !t.loanId)).length,
     days, avgDaily: days ? r2(spending / days) : 0,
     rate: income > 0 ? Math.round(((income - spending) / income) * 100) : null, // share of the income that was kept
     byCat: byCategory(outs), inCat: byCategory(inM.filter(isIncome)),
@@ -166,4 +166,37 @@ export function paceSeries(txs, budgets, today = new Date()) {
   let run = 0
   const cum = daily.map(v => (run = r2(run + v)))
   return { limit, dim, now, cum, spent: run, paceToday: r2((limit * now) / dim) }
+}
+
+// ---- Loans ---------------------------------------------------------------------------------
+// Loans are stored as { id, dir: 'borrowed' | 'lent', who, amount, total, date, due, note, txId?, space? } and every
+// repayment as its own record { id, loanId, amount, date, note, txId? }. What is left to pay is worked out from them,
+// never stored, so two devices adding payments to the same loan can never overwrite each other.
+// When a loan or payment is also recorded in an account, the transaction it makes carries `loanId` and the
+// category 'Loan'. Those transactions move the account balance but are not income or spending (see monthStats).
+
+export function loanState(loan, pays, today = ymd(new Date())) {
+  const paid = r2(pays.reduce((a, p) => a + (p.loanId === loan.id ? p.amount : 0), 0))
+  const left = Math.max(0, r2(loan.total - paid)), settled = left <= 0
+  return { paid, left, settled, pct: loan.total > 0 ? Math.min(100, Math.round((paid / loan.total) * 100)) : 100, overdue: !settled && !!loan.due && loan.due < today }
+}
+
+// What you still owe, what you are still owed, and how many open loans there are (overdue ones counted separately).
+export function loanTotals(loans, pays, today = ymd(new Date())) {
+  const t = { owe: 0, owed: 0, open: 0, overdue: 0 }
+  loans.forEach(l => {
+    const s = loanState(l, pays, today)
+    if (s.settled) return
+    t.open++; if (s.overdue) t.overdue++
+    if (l.dir === 'borrowed') t.owe = r2(t.owe + s.left); else t.owed = r2(t.owed + s.left)
+  })
+  return t
+}
+
+// The account transaction for a loan (pay = null) or for one of its payments.
+// Borrowing brings money in and repaying sends it out; lending sends it out and being paid back brings it in.
+export function loanTx(loan, pay, pocket, id) {
+  const incoming = loan.dir === 'borrowed' ? !pay : !!pay
+  const note = pay ? (loan.dir === 'borrowed' ? `Repaid ${loan.who}` : `${loan.who} paid back`) : (loan.dir === 'borrowed' ? `Loan from ${loan.who}` : `Loan to ${loan.who}`)
+  return { id, type: incoming ? 'in' : 'out', amount: pay ? pay.amount : loan.amount, pocket, category: 'Loan', note, loanId: loan.id, date: toISO(pay ? pay.date : loan.date) }
 }
