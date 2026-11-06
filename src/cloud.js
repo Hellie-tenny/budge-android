@@ -30,7 +30,7 @@ try { auth = isNative() ? initializeAuth(app, { persistence: [indexedDBLocalPers
 const nativePlugin = () => import('@capacitor-firebase/authentication')
 
 // Calls fn with the signed-in person ({ uid, email }) or null. Returns a function that stops listening.
-export const watchUser = fn => onAuthStateChanged(auth, u => fn(u ? { uid: u.uid, email: u.email, hasPassword: u.providerData.some(p => p.providerId === 'password') } : null))
+export const watchUser = fn => onAuthStateChanged(auth, u => fn(u ? { uid: u.uid, email: u.email, name: u.displayName || '', hasPassword: u.providerData.some(p => p.providerId === 'password') } : null))
 
 export async function signUp(email, password) {
   const { user } = await createUserWithEmailAndPassword(auth, email, password)

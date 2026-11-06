@@ -895,7 +895,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.1.1'
+const APP_VERSION = '1.1.2'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1470,13 +1470,14 @@ function Sprout({ onLock }) {
   const syncer = useSync({ user, sync, setSync, local: syncLocal, apply: applySync })
   const pristine = !txs.length && !rawGoals.length && !shop.length && !recurring.length && !loans.length && !Object.keys(budgets).length
   const h = new Date().getHours(), greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
+  const first = (user?.name || '').trim().split(/\s+/)[0] // Google sign-in gives a name; email sign-ups have none, so they just get the plain greeting
   return (
     <CatCtx.Provider value={catApi}>
     <div className="mx-auto flex h-full max-w-md flex-col lg:max-w-none lg:flex-row">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex items-end justify-between px-5 pb-3 pt-[calc(1rem+env(safe-area-inset-top))] lg:px-10 lg:pb-4 lg:pt-8">
         <div>
-          <p className="text-sm text-slate-500">{tab === 'home' ? greet : biz ? 'Sprout Business' : 'Sprout'}</p>
+          <p className="text-sm text-slate-500">{tab === 'home' ? greet + (first ? ', ' + first : '') : biz ? 'Sprout Business' : 'Sprout'}</p>
           <h1 className="text-2xl font-bold text-navy">{tab === 'home' ? (biz ? 'Your business' : 'Your money') : TABS.find(t => t[0] === tab)[1]}</h1>
         </div>
         <div className="flex gap-2 text-slate-500">
