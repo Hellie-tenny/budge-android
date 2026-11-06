@@ -97,3 +97,37 @@ export async function monthReminders(on, ask = false) {
     return true
   } catch { return false }
 }
+
+// "Anything to log from today?" reminders, at the chosen time (Android app only), for today (if there is still time and
+// nothing has been logged yet) and the next six days. Call it again whenever the app opens or a transaction is saved:
+// it replaces the old set, so a day on which the person has already logged something never gets a reminder, and after a
+// week without opening the app the reminders simply run out instead of nagging. With on = false it just cancels them.
+// It only asks for permission when ask is true. The text carries no amounts or names: it can appear on the lock screen.
+const DAILY_IDS = [9101, 9102, 9103, 9104, 9105, 9106, 9107]
+const NUDGES = [
+  ['Anything to log from today?', 'Add what you spent or received while you still remember it.'],
+  ['A quick check before bed', 'Did you pay for anything today that is not in Sprout yet?'],
+  ['Keep your numbers true', 'It takes a minute to add today\'s spending.'],
+  ['Evening check-in', 'Any airtime, food, transport or money in or out to add?'],
+]
+export async function dailyReminder(on, time = '20:00', loggedToday = false, ask = false, now = new Date()) {
+  const ln = plugin('LocalNotifications')
+  if (!ln) return false
+  try {
+    await ln.cancel({ notifications: DAILY_IDS.map(id => ({ id })) })
+    if (!on) return false
+    let p = await ln.checkPermissions()
+    if (ask && /^prompt/.test(p.display)) p = await ln.requestPermissions()
+    if (p.display !== 'granted') return false
+    const [h, m] = String(time).split(':').map(Number)
+    const notifications = []
+    DAILY_IDS.forEach((id, i) => {
+      const at = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h || 0, m || 0, 0)
+      if (at <= now || (i === 0 && loggedToday)) return
+      const [title, body] = NUDGES[(at.getDate() + at.getMonth()) % NUDGES.length]
+      notifications.push({ id, title, body, schedule: { at, allowWhileIdle: true } })
+    })
+    if (notifications.length) await ln.schedule({ notifications })
+    return true
+  } catch { return false }
+}

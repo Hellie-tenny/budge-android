@@ -1,12 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from 'react'
 import { mask, hasPin, enablePin, changePin, disablePin, newRecovery, vaultGet, vaultPut, lock, PinPad, PinCheck, LockScreen, PIN_LEN, LOCK_AFTER_MS, REVEAL_MS, REVEAL_ON_UNLOCK, sealBackup, openBackup } from './security.jsx'
-import { loanTx, ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd, paceSeries } from './logic.js'
+import { loanTx, loggedOn, ymd, monthKey, toISO, dueDates, describeRule, wrapBackup, checkBackup, withBalances, withSaved, migratePockets, migrateGoals, migrateData, legacyPockets, legacyGoals, stampChanges, removedIds, recurringTxId, monthStats, prevMonthKey, monthName, budgetResults, balanceAtEnd, paceSeries } from './logic.js'
 import UpdatePrompt from './UpdatePrompt.jsx'
 import AndroidUpdate from './AndroidUpdate.jsx'
 import Logo from './Logo.jsx'
 import { LoansSheet, LoanHomeCard } from './Loans.jsx'
 import { watchUser, signUp, signIn, signInGoogle, signOutUser, deleteAccount, resetPassword, authMessage } from './cloud.js'
-import { isNative, shareFile, onBackButton, exitApp, onAppState, notify, monthReminders } from './native.js'
+import { isNative, shareFile, onBackButton, exitApp, onAppState, notify, monthReminders, dailyReminder } from './native.js'
 import { createSyncKey, openSyncKey, passphraseProblem, changePassphrase, newRecoveryCode, exportSyncKey, importSyncKey } from './syncCrypto.js'
 import { getMeta, putMeta, deleteCloudData, syncMessage } from './syncCloud.js'
 import { useSync } from './useSync.js'
@@ -425,7 +425,7 @@ function ReportSheet({ txs, pockets, budgets, month: key, biz, onClose }) {
   )
 }
 
-function Budgets({ budgets, setBudgets, txs, onManage, remind, setRemind }) {
+function Budgets({ budgets, setBudgets, txs, onManage, remind, setRemind, eve, setEve, toggleEve, eveNote }) {
   const { active } = useCats()
   const spent = c => txs.filter(t => t.type === 'out' && t.category === c && month(t.date) === thisMonth()).reduce((a, t) => a + t.amount, 0)
   return (
@@ -435,6 +435,14 @@ function Budgets({ budgets, setBudgets, txs, onManage, remind, setRemind }) {
         <button onClick={onManage} className="shrink-0 text-sm font-semibold text-azure">Edit categories</button>
       </div>
       {isNative() && <label className="flex items-center justify-between gap-3 rounded-2xl bg-surface p-3 text-sm lg:col-span-2"><span>Remind me at the start of each month, with last month's report</span><input type="checkbox" checked={remind} onChange={e => setRemind(e.target.checked)} className="h-5 w-5 accent-azure" /></label>}
+      {isNative() && (
+        <div className="space-y-2 rounded-2xl bg-surface p-3 text-sm lg:col-span-2">
+          <label className="flex items-center justify-between gap-3"><span>Remind me in the evening to log what I spent</span><input type="checkbox" checked={eve.on} onChange={e => toggleEve(e.target.checked)} className="h-5 w-5 accent-azure" /></label>
+          {eve.on && <label className="flex items-center justify-between gap-3"><span className="text-slate-500">Time</span><input type="time" value={eve.time} onChange={e => e.target.value && setEve(v => ({ ...v, time: e.target.value }))} className="rounded-xl bg-paper px-3 py-1.5 text-ink outline-none" /></label>}
+          {eve.on && eveNote && <p className="text-xs text-down">{eveNote}</p>}
+          {eve.on && <p className="text-xs text-slate-500">Skipped on days you have already logged something, and paused after a week without opening Sprout.</p>}
+        </div>
+      )}
       {active('out').map(({ id: c, name, color }) => {
         const lim = budgets[c] || 0, s = spent(c), pct = lim ? Math.min(100, (s / lim) * 100) : 0, bad = lim && s > lim
         return (
@@ -895,7 +903,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.1.2'
+const APP_VERSION = '1.2.0'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
@@ -1327,6 +1335,22 @@ function Sprout({ onLock }) {
     monthReminders(monthRemind, onBudgets)
     return onAppState(active => { if (active) monthReminders(monthRemind, false) })
   }, [monthRemind, onBudgets])
+  // Android: the evening "log today's spending" reminder. Off until the person turns it on. It is rescheduled whenever the app
+  // opens or something is logged, so a day on which they already logged gets no reminder.
+  const [eve, setEve] = useStore('budgie.eveRemind', { on: false, time: '20:00' })
+  const [eveNote, setEveNote] = useState('')
+  const txsRef = useRef(txs); txsRef.current = txs
+  const loggedToday = loggedOn(txs)
+  useEffect(() => {
+    if (!isNative()) return
+    const run = () => dailyReminder(eve.on, eve.time, loggedOn(txsRef.current), false)
+    run()
+    return onAppState(active => { if (active) run() })
+  }, [eve.on, eve.time, loggedToday])
+  const toggleEve = async on => {
+    setEve(e => ({ ...e, on })); setEveNote('')
+    if (on && !(await dailyReminder(true, eve.time, loggedOn(txsRef.current), true))) setEveNote("Sprout can't send notifications yet. Turn them on for Sprout in your phone's settings.")
+  }
   const [tour, setTour] = useState(() => { try { return !tourSeen() && !vaultGet('budgie.txs', []).length } catch { return false } }) // shown once, and only to someone with no transactions yet
   const endTour = () => { tourDone(); setTour(false); setTab('home') }
   const [user, setUser] = useState(null)
@@ -1494,7 +1518,7 @@ function Sprout({ onLock }) {
         {tab === 'home' && <Home pockets={spacePockets} txs={sorted} budgets={spaceBudgets} biz={biz} setTab={setTab} onAccount={() => setSheet('account')} loanCard={<LoanHomeCard loans={spaceLoans} pays={spaceLoanPays} onOpen={() => needPin('loans')} />} />}
         {tab === 'activity' && <Activity txs={sorted} onDelete={del} onEdit={t => needPin({ edit: t })} />}
         {tab === 'insights' && <Insights txs={spaceTxs} pockets={spacePockets} budgets={spaceBudgets} biz={biz} onReport={k => needPin({ report: k })} />}
-        {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} />}
+        {tab === 'budgets' && <Budgets budgets={spaceBudgets} setBudgets={setSpaceBudgets} txs={spaceTxs} onManage={() => setSheet('cats')} remind={monthRemind} setRemind={setMonthRemind} eve={eve} setEve={setEve} toggleEve={toggleEve} eveNote={eveNote} />}
         {tab === 'plan' && !biz && <Plan shop={shop} setShop={setShop} goals={goals} setGoals={setGoalsStored} budgets={spaceBudgets} txs={spaceTxs} pockets={spacePockets} onFund={g => setSheet({ fund: g })} onBuy={i => needPin({ buy: i })} onUnbuy={unbuy} onBuyAll={(plan, items) => needPin({ buyAll: { plan, items } })} />}
         </div>
       </main>

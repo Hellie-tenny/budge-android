@@ -200,3 +200,7 @@ export function loanTx(loan, pay, pocket, id) {
   const note = pay ? (loan.dir === 'borrowed' ? `Repaid ${loan.who}` : `${loan.who} paid back`) : (loan.dir === 'borrowed' ? `Loan from ${loan.who}` : `Loan to ${loan.who}`)
   return { id, type: incoming ? 'in' : 'out', amount: pay ? pay.amount : loan.amount, pocket, category: 'Loan', note, loanId: loan.id, date: toISO(pay ? pay.date : loan.date) }
 }
+
+// True when the person has logged (or changed) something on this day. Entries the app posts by itself (recurring ones)
+// and an account's opening balance do not count. A backdated entry made today counts too, through its updatedAt stamp.
+export const loggedOn = (txs, day = ymd(new Date())) => txs.some(t => !t.recurId && t.note !== 'Opening balance' && (ymd(t.date) === day || (!!t.updatedAt && ymd(t.updatedAt) === day)))
