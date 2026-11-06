@@ -903,7 +903,7 @@ function BuyListSheet({ plan, items, pockets, onSave, onClose }) {
 
 const niceDate = ds => new Date(ds + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 
-const APP_VERSION = '1.2.0'
+const APP_VERSION = '1.1.3'
 const APK_URL = 'https://github.com/Hellie-tenny/budge-android/releases/latest/download/sprout.apk' // the newest APK, published by the build workflow
 
 const CodeBox = ({ code }) => (
